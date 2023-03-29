@@ -138,6 +138,7 @@ if __name__ == '__main__':
     print(A())
 
     # running the above yields
+    # as we expect we get 4 (channels) rank 2 (c_out) tensors that act as our atomic basis
     # >>> tensor([[[2.4019, -0.7598],
     #          [-0.7598, 1.5321]],
     #
