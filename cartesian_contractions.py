@@ -5,9 +5,12 @@ import string
 import torch
 
 from math import factorial as fact
-def pick_pairs(n: int, k: int, indices: list[str] = None): # what is the output of this func
+def pick_pairs(n: int, k: int, numbers: bool = False): # what is the output of this func
 
-    if not indices:
+    if numbers:
+        torch.arange(30)
+
+    else:
         indices = [char for char in string.ascii_lowercase[8:]]
 
     points = list(indices[:n])
@@ -31,6 +34,36 @@ def count_contractions(n: int, k: int) -> int:
 
     else:
         return int(fact(n) / (fact(n - 2 * k) * fact(k) * 2 ** k))
+
+#%%
+def count_contraction_paths(nu_max: int, n_free: int) -> int:
+    """"
+    gives the total number of ways that you will be ables to produce a tensor
+    of rank `n_free` all the possible routes from TPs of 1 to `nu_max`
+
+    will probably have to revisit when I allow different inputs
+
+    Parameters:
+          nu_max: maximum tensor product order
+          n_free: number of free indices of final equivariants
+
+    Returns:
+          tot: total number of paths to produce this
+    """
+    tot = 0
+
+    for nu in range(1, nu_max + 1):
+
+        k = (nu * 1 - n_free)/2
+
+        # so that only when k is integer do we consider it
+        # can't have half a contraction!
+        if k.is_integer():
+
+            k = int(k)
+            tot += count_contractions(n=nu, k=k)
+
+    return tot
 
 # def cons_to_einsums(cons: tuple[tuple], n: int) -> list[str]:
 #     """
@@ -187,26 +220,28 @@ def tensors_to_n(n: int, max_tensor_out_rank: int, tensors_in: list[torch.Tensor
 # just so it doesn't run when we import the module!
 if __name__ == '__main__':
 
-    u = torch.arange(1,4)
-    v = torch.arange(4,7)
-    s = torch.arange(7,10)
-    t = torch.arange(10,13)
-    p = torch.arange(13,16)
-    q = torch.arange(16,19)
+    print(list(pick_pairs(n=4, k=2, numbers=True)))
 
-    indices = [char for char in string.ascii_lowercase[8:]] # i -> z
-
-    # cons_combs = list(pick_pairs(n=4, k=1, indices=indices))
+    # u = torch.arange(1,4)
+    # v = torch.arange(4,7)
+    # s = torch.arange(7,10)
+    # t = torch.arange(10,13)
+    # p = torch.arange(13,16)
+    # q = torch.arange(16,19)
     #
-    # cons = cons_to_einsums(cons=cons_combs[0], n=4)
-
-    print(tensors_to_n(n=4, max_tensor_out_rank=2, tensors_in=[u,v,s,t]))
-
-    dim = 30
-    I = np.random.rand(dim, dim, dim, dim)
-    C = np.random.rand(dim, dim)
-
-    print(oe.contract_path('pi,qj,ijkl,rk,sl->pqrs', C, C, I, C, C))
-
-    np.einsum('pi,qj,ijkl,rk,sl->pqrs', C, C, I, C, C)
-    oe.contract_path('pi,qj,ijkl,rk,sl->pqrs', C, C, I, C, C)
+    # indices = [char for char in string.ascii_lowercase[8:]] # i -> z
+    #
+    # # cons_combs = list(pick_pairs(n=4, k=1, indices=indices))
+    # #
+    # # cons = cons_to_einsums(cons=cons_combs[0], n=4)
+    #
+    # print(tensors_to_n(n=4, max_tensor_out_rank=2, tensors_in=[u,v,s,t]))
+    #
+    # dim = 30
+    # I = np.random.rand(dim, dim, dim, dim)
+    # C = np.random.rand(dim, dim)
+    #
+    # print(oe.contract_path('pi,qj,ijkl,rk,sl->pqrs', C, C, I, C, C))
+    #
+    # np.einsum('pi,qj,ijkl,rk,sl->pqrs', C, C, I, C, C)
+    # oe.contract_path('pi,qj,ijkl,rk,sl->pqrs', C, C, I, C, C)
