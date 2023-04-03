@@ -4,6 +4,7 @@ import itertools
 import string
 import torch
 
+from typing import Optional
 from math import factorial as fact
 def pick_pairs(n: int, k: int, numbers: bool = False): # what is the output of this func
 
@@ -29,23 +30,24 @@ def pick_pairs(n: int, k: int, numbers: bool = False): # what is the output of t
 
 
 def count_contractions(n: int, k: int) -> int:
-    if k > n / 2:
+    if k > n/2 or k < 0:
         return 0
+
 
     else:
         return int(fact(n) / (fact(n - 2 * k) * fact(k) * 2 ** k))
 
 #%%
-def count_contraction_paths(nu_max: int, n_free: int) -> int:
+def count_contraction_paths(nu_max: int, c_out: int) -> int:
     """"
     gives the total number of ways that you will be ables to produce a tensor
-    of rank `n_free` all the possible routes from TPs of 1 to `nu_max`
+    of rank `c_out` all the possible routes from TPs of 1 to `nu_max`
 
     will probably have to revisit when I allow different inputs
 
     Parameters:
           nu_max: maximum tensor product order
-          n_free: number of free indices of final equivariants
+          c_out: number of free indices of final equivariants
 
     Returns:
           tot: total number of paths to produce this
@@ -54,7 +56,7 @@ def count_contraction_paths(nu_max: int, n_free: int) -> int:
 
     for nu in range(1, nu_max + 1):
 
-        k = (nu * 1 - n_free)/2
+        k = (nu * 1 - c_out)/2
 
         # so that only when k is integer do we consider it
         # can't have half a contraction!
@@ -65,7 +67,7 @@ def count_contraction_paths(nu_max: int, n_free: int) -> int:
 
     return tot
 
-# def cons_to_einsums(cons: tuple[tuple], n: int) -> list[str]:
+# def cons_to_einsum(cons: tuple[tuple], n: int) -> list[str]:
 #     """
 #     gives the string necessary for einsum for a set of contractions given in order
 #     e.g. the contractions (i,j) then (k,l) returns ['iikl->kl', 'kl->']
@@ -108,7 +110,73 @@ def count_contraction_paths(nu_max: int, n_free: int) -> int:
 #
 #     return einsums
 
-def cons_to_einsum(cons: tuple[tuple], n: int, indices: list[str] = None) -> str:
+def cons_to_einsum(cons: tuple[tuple], n: int, split: Optional[list] = [], indices: Optional[list[str]] = None, multi_channel: Optional[bool] = False) -> str:
+    """
+    gives the string necessary for einsum for a set of contractions given in order
+    e.g. the contractions (i,j), (k,l) returns 'iikk->'
+
+    Parameters:
+          cons: the indices that will be contracted
+          n: total number of indices i.e. tensor rank
+
+    Returns:
+          einsum: einsum subscript string for `torch.einsum`
+    """
+
+    if not indices:
+        indices = [char for char in string.ascii_lowercase[8:]]
+
+    if multi_channel:
+        indices = ['a' + index for index in indices]
+
+    rem_letters = ''.join(indices[:n])
+    # einsum = ','.join(indices[:n]) # we need to use the split in here
+
+    # need to sort this car crash **k
+
+    zero_count = split.count(0)
+
+    if zero_count == len(split): # scalars only
+        return 'a' + ',a'.join(indices[:zero_count]) + '->a'
+
+    else: # if not all scalars,
+        split = split[zero_count:]
+
+    grouped_indices = []
+    start = 0
+
+
+    if split:
+        for size in split:
+            group = ''.join(indices[start:start+size])
+            grouped_indices.append(group)
+            start += size
+
+
+        einsum = 'a' + ',a'.join(grouped_indices)
+
+    else:
+        einsum = 'a' + ',a'.join(indices[:n]) # we need to use the split in here
+
+    # this is not very nice, need to fix **
+    if zero_count:
+        if einsum:
+            einsum = 'a' + ',a'.join(indices[n:n+zero_count]) + ',' + einsum
+        else: 'a' + ',a'.join(indices[n:n+zero_count])
+
+    for con in cons:
+
+        einsum = einsum.replace(con[1], con[0])
+
+        rem_letters = rem_letters.replace(con[0], '')
+        rem_letters = rem_letters.replace(con[1], '')
+
+    einsum += '->'
+    einsum += 'a' + rem_letters
+
+    return einsum
+
+def old_cons_to_einsum(cons: tuple[tuple], n: int, split: Optional[list] = [], indices: Optional[list[str]] = None) -> str:
     """
     gives the string necessary for einsum for a set of contractions given in order
     e.g. the contractions (i,j), (k,l) returns 'iikk->'
@@ -125,7 +193,40 @@ def cons_to_einsum(cons: tuple[tuple], n: int, indices: list[str] = None) -> str
         indices = [char for char in string.ascii_lowercase[8:]]
 
     rem_letters = ''.join(indices[:n])
-    einsum = ','.join(indices[:n])
+    # einsum = ','.join(indices[:n]) # we need to use the split in here
+
+    # need to sort this car crash **k
+
+    zero_count = split.count(0)
+
+    if zero_count == len(split): # scalars only
+        return ','.join(('i...',) * zero_count) + '->' + 'i...'
+
+
+    else:
+        split = split[zero_count:]
+
+    grouped_indices = []
+    start = 0
+
+
+    if split:
+        for size in split:
+            group = ''.join(indices[start:start+size])
+            grouped_indices.append(group)
+            start += size
+
+
+        einsum = ','.join(grouped_indices)
+
+    else:
+        einsum = ','.join(indices[:n]) # we need to use the split in here
+
+    # this is not very nice, need to fix **
+    if zero_count:
+        if einsum:
+            einsum = ','.join(indices[n:n+zero_count]) + ',' + einsum
+        else: ','.join(indices[n:n+zero_count])
 
     for con in cons:
 
@@ -135,7 +236,7 @@ def cons_to_einsum(cons: tuple[tuple], n: int, indices: list[str] = None) -> str
         rem_letters = rem_letters.replace(con[1], '')
 
     einsum += '->'
-    einsum += rem_letters
+    einsum += rem_letters + '...'
 
     return einsum
 
@@ -189,6 +290,24 @@ def compute_cons_all_combs(n: int, k: int, tensors_in: torch.Tensor, indices: li
 
     return complete_con_prods
 
+def find_combinations(n, nu):
+    def helper(n, nu, current_combination, start):
+        if n == 0 and nu == 0:
+            combinations.append(current_combination[:])
+            return
+
+        if n < 0 or nu == 0:
+            return
+
+        for i in range(start, 3):
+            current_combination.append(i)
+            helper(n - i, nu - 1, current_combination, i)
+            current_combination.pop()
+
+    combinations = []
+    helper(n, nu, [], 0)
+    return combinations
+
 
 def tensors_to_n(n: int, max_tensor_out_rank: int, tensors_in: list[torch.Tensor]) -> list[list[torch.Tensor]]:
     """
@@ -217,31 +336,57 @@ def tensors_to_n(n: int, max_tensor_out_rank: int, tensors_in: list[torch.Tensor
 
     return tensors_out
 
-# just so it doesn't run when we import the module!
-if __name__ == '__main__':
 
-    print(list(pick_pairs(n=4, k=2, numbers=True)))
+def tensor_prod(r: torch.Tensor, order: int) -> torch.Tensor:
+    """
+    creates self tensor products of displacement vector r of rank order
+    i.e. r \otimes ... order times ... \otimes r = r^{\otimes order}
 
-    # u = torch.arange(1,4)
-    # v = torch.arange(4,7)
-    # s = torch.arange(7,10)
-    # t = torch.arange(10,13)
-    # p = torch.arange(13,16)
-    # q = torch.arange(16,19)
-    #
-    # indices = [char for char in string.ascii_lowercase[8:]] # i -> z
-    #
-    # # cons_combs = list(pick_pairs(n=4, k=1, indices=indices))
-    # #
-    # # cons = cons_to_einsums(cons=cons_combs[0], n=4)
-    #
-    # print(tensors_to_n(n=4, max_tensor_out_rank=2, tensors_in=[u,v,s,t]))
-    #
-    # dim = 30
-    # I = np.random.rand(dim, dim, dim, dim)
-    # C = np.random.rand(dim, dim)
-    #
-    # print(oe.contract_path('pi,qj,ijkl,rk,sl->pqrs', C, C, I, C, C))
-    #
-    # np.einsum('pi,qj,ijkl,rk,sl->pqrs', C, C, I, C, C)
-    # oe.contract_path('pi,qj,ijkl,rk,sl->pqrs', C, C, I, C, C)
+    the non-trivial part of this function is creating an einsum expression
+    e.g. for order = 2, einsum = 'i...,j...->...ij'
+
+    in the usual use-case, r is the normalised direction to the central node
+    from a neighbour
+
+    Parameters:
+        r: vectors to tensor product with itself
+        order: the number of times to do the tensor product
+
+    Returns:
+          r_tensor: output tensor of rank-order
+    """
+
+    # clean this part up **
+    indices = [char for char in string.ascii_lowercase[8:8 + order]]  # i -> z
+    einsum_start = ','.join([f'{index}...' for index in indices])
+    joined_indices = ''.join(indices)
+    einsum_end = f'...{joined_indices}'
+    einsum = einsum_start + '->' + einsum_end
+
+    # using einsum to carry out the tp
+    r_tensor = torch.einsum(
+        einsum,
+        [r, ] * order
+    )
+
+    return r_tensor
+
+def e_rbf(r: torch.Tensor, n: int, c: Optional[int] = 2) -> torch.Tensor:
+    """
+    Orthogonal set of radial basis functions used in the DimeNet paper (https://arxiv.org/pdf/2003.03123.pdf)
+
+   Parameters:
+       r: absolute distance from
+       n: upto order n basis functions
+       c: parameter
+
+   Returns:
+         e_rbf: the value of the n radial basis functions at distance r
+    """
+
+    e_rbf_tilde = (2 / c) ** 0.5 * torch.sin(n * r) / r
+
+    # add polynomial back in later
+    u = 1  # - (p+1)*(p+2)/2 * r**p + p*(p+2)*r**(p+1) - p*(p+1)/2**r**(p+2)
+
+    return e_rbf_tilde * u

@@ -4,9 +4,9 @@
 
 import torch
 
-import cartesian_contractions as cc
-from torch.nn import Module, Parameter
+from torch.nn import Module, Linear
 
+from cartesian_contractions import e_rbf, cons_to_einsum, tensor_prod
 '''
 GENERAL SCHEMATIC OF FIRST LAYER: 
 h_0 are the scalars (usually atomic numbers) 
@@ -41,7 +41,7 @@ h_0'       h_1'      h_2' (update scalar, vector and matrix features)
 '''
 
 
-class create_As(Module):
+class AtomicBasis(Module):
     """ "
     Block that creates the atomic basis vectors A for a given neighbourhood
 
@@ -55,7 +55,7 @@ class create_As(Module):
           dim: dimension of features i.e. A tensor given by R^(dim * c_out)
     """
 
-    def __init__(self, h: torch.Tensor, rel_poss: torch.Tensor, c_out: int, n_channels: int, n_neighbours: int,
+    def __init__(self, c_out: int, n_channels: int, n_neighbours: int,
                  dim: int):
 
         # n_neighbours is a not nice way of saying irreps in -> look to MACE for inspo
@@ -64,79 +64,77 @@ class create_As(Module):
         super().__init__()
 
         # in future to map to different number of channels
-        self.k = n_channels
-        self.k_tilde = n_channels
-
+        self.k = n_channels # channels out
+        self.k_tilde = n_channels # channels in
         self.n_channels = n_channels
         self.c_out = c_out
-
-        # create the random weight matrix to mix channels
-        self.W = Parameter(data=torch.randn(self.k, self.k_tilde), requires_grad=True)
-        self.h = h
-
-        # create the empty matrix for our A/list of As (list of if n_channels > 1)
-        self.shape = [dim] * c_out
-        self.shape.insert(0, n_channels)
-        self.A = torch.zeros(self.shape)
-
-        # find the distances
-        self.dists = torch.linalg.norm(rel_poss, dim=0)
-        # find normalisation
-        self.norm_rel_poss = (rel_poss / self.dists)  # fix transpose here
+        self.lin = Linear(self.k_tilde, self.k, bias=False)
+        shape = [dim] * c_out
+        shape.insert(0, n_channels)
+        self.A = torch.zeros(shape)
 
         # create the tensor product, neat trick using old function
-        self.einsum = cc.cons_to_einsum(cons=[], n=self.c_out)
+        self.einsum = cons_to_einsum(cons=[], n=self.c_out)
 
-    def forward(self) -> torch.Tensor:
+    def forward(self, h, rel_poss) -> torch.Tensor:
+
+        self.dists = torch.linalg.norm(rel_poss, dim=0)
+        self.norm_rel_poss = (rel_poss / self.dists)
 
         # mixing channels
-        # var name to ensure we know what is going on!
-        # change back to h after implementation of torch class
-        h = self.W @ self.h
+        h = self.lin(h)
 
         # we are going to populate a tensor of zeros
         self.radial_emb = torch.zeros(self.n_channels, len(self.dists))
+        n_values = torch.arange(1, self.n_channels + 1).unsqueeze(1)
+        self.radial_emb = e_rbf(r=self.dists, n=n_values)
 
-        # nicer way of doing this or do I just need to stick into a fucntion
-        for n in range(1, self.n_channels + 1):
-            idx = n - 1
-            # find nicer way to sort index vs function input
-            # decide on usage of c and p parameters
-            self.radial_emb[idx] = e_rbf(x=self.dists, n=n, c=2)
+        rel_pos_tensors = tensor_prod(r=self.norm_rel_poss, order=c_out)
 
-        for i, rel_pos in enumerate(self.norm_rel_poss.T):  # fix dims
+        # for i, rel_pos in enumerate(self.norm_rel_poss.T):  # fix dims
+        #
+        #     rel_pos_tensor = torch.einsum(
+        #         self.einsum,  # the einsum required
+        #         *rel_pos.repeat(self.c_out, 1)  # c_out lots of the output tensor
+        #     )
+        #
+        #     # this is the important equation here!
+        #     self.A += self.radial_emb.T[i][:, None, None] * rel_pos_tensor * h[i][:, None, None]
 
-            rel_pos_tensor = torch.einsum(
-                self.einsum,  # the einsum required
-                *rel_pos.repeat(self.c_out, 1)  # c_out lots of the output tensor
-            )
+        self.A = torch.einsum(
+            'ai,a...,ai->i...',
+            self.radial_emb.T,
+            rel_pos_tensors,
+            h
+        )
 
-            # this is the important equation here!
-            self.A += self.radial_emb.T[i][:, None, None] * rel_pos_tensor * h.T[i][:, None, None]
 
         return self.A  # shape n_channels x dim x ... c_out times ... x dim i.e. list of these As one for ea. channel
 
 
-def e_rbf(x: torch.Tensor, n: int, c: int) -> torch.Tensor:
-    e_rbf_tilde = (2 / c) ** 0.5 * torch.sin(n * x) / x
-
-    # add polynomial back in later
-    u = 1  # - (p+1)*(p+2)/2 * x**p + p*(p+2)*x**(p+1) - p*(p+1)/2**x**(p+2)
-
-    return e_rbf_tilde * u
-
-
 if __name__ == '__main__':
-    dim = 2  # start off in 2D to keep things simple
-    n_neighbours = 5  # 5 neighbourhood points
-    rel_poss = torch.randn(2, n_neighbours)
-    n_channels = 4
-    h = torch.randn(n_channels, n_neighbours)  # three channels with values (1,2,3)
-    dist = torch.Tensor([1, -1])  # position (1,2)
-    c_out = 2
 
-    A = create_As(h=h, rel_poss=rel_poss, c_out=c_out, n_channels=n_channels, n_neighbours=n_neighbours, dim=dim)
-    print(A())
+    # easier this way!
+    torch.manual_seed(0)
+
+    dim = 2  # start off in 2D to keep things simple
+    n_neighbours = 5
+    rel_poss = torch.randn(2, n_neighbours)
+    n_channels = 100
+    h = torch.randn(n_neighbours, n_channels)
+    dist = torch.Tensor([1, -1])  # position (1,2)
+    As = []
+    c_out = 3
+
+    A = AtomicBasis(c_out=c_out, n_channels=n_channels, n_neighbours=n_neighbours, dim=dim)
+    As.append(A(h=h, rel_poss=rel_poss))
+
+    # for c_out in range(0,3):
+    #
+    #     A = AtomicBasis(c_out=c_out, n_channels=n_channels, n_neighbours=n_neighbours, dim=dim)
+    #     As.append(A(h=h, rel_poss=rel_poss))
+
+    print(As)
 
     # running the above yields
     # as we expect we get 4 (channels) rank 2 (c_out) tensors that act as our atomic basis
@@ -151,15 +149,3 @@ if __name__ == '__main__':
     #
     #         [[3.6124, 1.7162],
     #          [1.7162, 4.1594]]], grad_fn= < AddBackward0 >)
-
-    # list_As = []
-    # c_out_max = 3
-
-    # i.e. for c_out == 0 ... c_out_max
-    # for c_out in range(1, c_out_max + 1):
-    #     As = create_As(h=h, rel_poss=rel_poss, c_out=c_out, n_channels=n_channels, n_neighbours=n_neighbours,
-    #                       dim=dim)
-    #
-    #     list_As.append(As())
-    #
-    # print(list_As)
