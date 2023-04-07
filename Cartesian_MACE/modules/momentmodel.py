@@ -9,7 +9,7 @@ from Cartesian_MACE.utils.cartesian_contractions import (
     pick_pairs,
     cons_to_einsum,
     count_contractions,
-    contraction_is_valid
+    contraction_is_valid,
 )
 
 
@@ -34,6 +34,7 @@ find all contractions for mapping:
 inputs, TP order -> n contractions to given tensor rank
 """
 
+
 ############## IGNORE THIS CLASS FOR NOW ##############
 class CartesianEquivariantBlock(nn.Module):
     """
@@ -48,9 +49,7 @@ class CartesianEquivariantBlock(nn.Module):
 
     """
 
-    def __init__(
-        self, nu_max: int, c_out_max: int, dim: int
-    ):
+    def __init__(self, nu_max: int, c_out_max: int, dim: int):
         super().__init__()
 
         self.nu_max = nu_max
@@ -60,7 +59,14 @@ class CartesianEquivariantBlock(nn.Module):
         self.weighted_sums = nn.ModuleList()
 
         for c_out in range(0, self.c_out_max + 1):
-            self.weighted_sums.append(WeightedSum(nu_max=self.nu_max, c_out=c_out, n_channels=self.n_channels, dim=self.dim))
+            self.weighted_sums.append(
+                WeightedSum(
+                    nu_max=self.nu_max,
+                    c_out=c_out,
+                    n_channels=self.n_channels,
+                    dim=self.dim,
+                )
+            )
 
     def forward(self, u: torch.Tensor) -> List[torch.Tensor]:
         """ "
@@ -79,10 +85,11 @@ class CartesianEquivariantBlock(nn.Module):
 
         return tensors_out
 
+
 # change class name?
 class WeightedSum(nn.Module):
     """
-    Produces a weighted sum of all possible contractions with c_out indices 
+    Produces a weighted sum of all possible contractions with c_out indices
     (even if they have different numbers of contractions)
     This function calls `CartesianContraction` to carry out the heavy lifting.
     Linear combination initialised with random weights (look at torch.nn.Linear for better intialisation route)
@@ -92,64 +99,84 @@ class WeightedSum(nn.Module):
           c_out: number of free indices of equivariants
     """
 
-    def __init__(self, nu_max: int, c_in_max: int, c_out_max: int, n_channels: int, dim: int):
+    def __init__(
+        self,
+        nu_max: int,
+        c_in_max: int,
+        c_out_max: int,
+        n_channels: int,
+        dim: int,
+        n_nodes: int,
+    ):
         super().__init__()
+        self.n_nodes = n_nodes
         self.nu_max = nu_max
-        self.c_in_max = c_in_max # max rank of A's
+        self.c_in_max = c_in_max  # max rank of A's
         self.c_out_max = c_out_max
         self.n_channels = n_channels
         self.contractions = ModuleDict()  # list of the contraction objects
         self.channel_mixing = ParameterDict()  # list of weights for channel mixing
-        self.tot = [0,] * (c_out_max + 1) # running total of number of each set of contractions
+        self.tot = [
+            0,
+        ] * (
+            c_out_max + 1
+        )  # running total of number of each set of contractions
         self.dim = dim
 
         # loop over all orders of TP
         # i.e. have nu lots of A elements
         for nu in range(1, self.nu_max + 1):
-
             # loop over all possible number of indices before contraction
             # this comes from the fact that A's can have different rank
             # e.g. for nu=3 n_indices=5 an example of a split -> [1,2,2]
             for n_indices in range(0, c_in_max * nu + 1):
-
                 # find all combinations of tensors that have nu and n_indices
                 # e.g. for nu = 2 and n_indices = 2 -> [1,1] and [0,2]
                 splits = find_combinations(n=n_indices, nu=nu)
 
                 for split in splits:
-
                     # gives us dict key for the contraction class
                     # acts as unique hash
                     split_str = "".join(map(str, split))
 
                     # only one mix of A's channels per split (i.e. same mix for all `c_out`)
+                    # currently create the mixing before checking if there are any valid one **
                     self.channel_mixing[split_str] = Parameter(
                         data=torch.randn(nu, self.n_channels, self.n_channels),
                         requires_grad=True,
                     )
 
-                    for c_out in range(0,self.c_out_max + 1):
-
-                        num_contractions= (n_indices - c_out) / 2
+                    for c_out in range(0, self.c_out_max + 1):
+                        num_contractions = (n_indices - c_out) / 2
 
                         # can only have a positive integer number of contractions
-                        if contraction_is_valid(num_legs_in=n_indices, num_legs_out=c_out):
-
+                        if contraction_is_valid(
+                            num_legs_in=n_indices, num_legs_out=c_out
+                        ):
                             # record how many tensors there will be at inference (to build shapes of weights)
-                            self.tot[c_out] += count_contractions(n=n_indices, num_contractions=num_contractions)
+                            self.tot[c_out] += count_contractions(
+                                n=n_indices, num_contractions=num_contractions
+                            )
 
-                            self.contractions[f'{split_str}:{c_out}'] = CartesianContraction(
+                            self.contractions[
+                                f"{split_str}:{c_out}"
+                            ] = CartesianContraction(
                                 n_indices=n_indices,
                                 c_out=c_out,
                                 dim=self.dim,
                                 n_channels=self.n_channels,
-                                extra_dims=1, # take out hard-coding
+                                extra_dims=1,  # take out hard-coding
+                                n_extra_dim=self.n_nodes,  # need to put in size for contractions ahead of time can we get past this?**
                                 split=split,
                             )
 
+        # add in extra dim for the node dimension
         self.path_weights = [
-            Parameter(data=torch.randn(self.tot[c_out], self.n_channels), requires_grad=True)
-            for c_out in range(0, self.c_out_max + 1)]
+            Parameter(
+                data=torch.randn(self.tot[c_out], self.n_channels), requires_grad=True
+            )
+            for c_out in range(0, self.c_out_max + 1)
+        ]
 
     def forward(self, a_set: List[torch.Tensor]) -> torch.Tensor:
         """
@@ -162,49 +189,52 @@ class WeightedSum(nn.Module):
         """
         # one list per c_out rank
         messages = []
-        tensor_bucket = [ [] for _ in range(0, self.c_out_max + 1)]
+        tensor_bucket = [[] for _ in range(0, self.c_out_max + 1)]
 
         # very similar steps for retrieving the contraction objects and running inference
         for nu in range(1, self.nu_max + 1):
-
             for n_indices in range(0, 2 * nu + 1):
-
                 splits = find_combinations(n=n_indices, nu=nu)
 
                 for split in splits:
-
                     split_str = "".join(map(str, split))
 
                     # channel mixing of the A's
+                    # need to add in extra dim for nodes here
                     mix = self.channel_mixing[split_str]
                     tensors_in = [
-                        torch.einsum("ij,j...->i...", mix[i], a_set[rank])
+                        torch.einsum("ij,kj...->ki...", mix[i], a_set[rank])
                         for i, rank in enumerate(split)
                     ]
 
-                    for c_out in range(0,self.c_out_max + 1):
+                    for c_out in range(0, self.c_out_max + 1):
+                        num_contractions = (n_indices - c_out) / 2
 
-                        num_contractions= (n_indices - c_out) / 2
-
-                        if contraction_is_valid(num_legs_in=n_indices, num_legs_out=c_out):
-
-                            tensors_out = self.contractions[f'{split_str}:{c_out}'](
+                        if contraction_is_valid(
+                            num_legs_in=n_indices, num_legs_out=c_out
+                        ):
+                            tensors_out = self.contractions[f"{split_str}:{c_out}"](
                                 tensors_in=tensors_in
                             )
 
                             tensor_bucket[c_out].extend(tensors_out)
 
-
         # for ea. c_out rank we take the linear weighted combination of paths
         for c_out in range(0, self.c_out_max + 1):
-            messages.append(torch.einsum("ij,ij...->j...", self.path_weights[c_out], torch.stack(tensor_bucket[c_out])))
+            messages.append(
+                torch.einsum(
+                    "ij,iaj...->aj...",
+                    self.path_weights[c_out],
+                    torch.stack(tensor_bucket[c_out]),
+                )
+            )
 
         return messages
 
 
 class CartesianContraction(nn.Module):
     """
-    Low-level class that finds the possible contractions for a given set of free indices and stores the paths for 
+    Low-level class that finds the possible contractions for a given set of free indices and stores the paths for
     efficient use
 
     Parameters:
@@ -215,7 +245,14 @@ class CartesianContraction(nn.Module):
     """
 
     def __init__(
-        self, n_indices: int, c_out: int, dim: int, n_channels: int, extra_dims: int, n_neighbours: Optional[int] = 0, split: Optional[List] = None,
+        self,
+        n_indices: int,
+        c_out: int,
+        dim: int,
+        n_channels: int,
+        extra_dims: int,
+        n_extra_dim: Optional[int] = 0,
+        split: Optional[List] = None,
     ):
         super().__init__()
         self.n_indices = n_indices
@@ -227,24 +264,31 @@ class CartesianContraction(nn.Module):
         self.tensors_out = []
         self.split = split
         self.extra_dims = extra_dims
-        self.n_neighbours = n_neighbours # this is not the most ideal look for better solutions **
+        self.n_extra_dim = (
+            n_extra_dim  # extra_dim for AtomicBasis and nodes for WeightedSum
+        )
         # this just applies to the A's and not the message creation step
 
-        self.num_contractions= (self.n_indices - self.c_out) / 2
+        self.num_contractions = (self.n_indices - self.c_out) / 2
 
         # can only have a positive integer number of contractions
         if contraction_is_valid(num_legs_in=self.n_indices, num_legs_out=self.c_out):
-
-            cons_combs = list(pick_pairs(n=self.n_indices, num_contractions=self.num_contractions))
+            cons_combs = list(
+                pick_pairs(n=self.n_indices, num_contractions=self.num_contractions)
+            )
 
             # find the tensor shapes ahead of time to store path
             self.shapes = self.produce_tensor_shapes(
-                split=split, n_channels=self.n_channels, dim=self.dim, n_neighbours=self.n_neighbours
+                split=split,
+                n_channels=self.n_channels,
+                dim=self.dim,
+                n_extra_dim=self.n_extra_dim,
             )
 
-
             for cons in cons_combs:
-                einsum = cons_to_einsum(cons=cons, n=n_indices, split=self.split, extra_dims=self.extra_dims)
+                einsum = cons_to_einsum(
+                    cons=cons, n=n_indices, split=self.split, extra_dims=self.extra_dims
+                )
 
                 self.einsums.append(
                     einsum
@@ -253,7 +297,13 @@ class CartesianContraction(nn.Module):
                 # self.register_buffer(einsum, oe.contract_expression(einsum, *n_indices * [(dim,)]))
                 self.buffer[einsum] = oe.contract_expression(einsum, *self.shapes)
 
-    def produce_tensor_shapes(self, split: List[int], n_channels: int, dim: int, n_neighbours: Optional[int] = 0) -> List[Tuple[int]]:
+    def produce_tensor_shapes(
+        self,
+        split: List[int],
+        n_channels: int,
+        dim: int,
+        n_extra_dim: Optional[int] = 0,
+    ) -> List[Tuple[int]]:
         """
         This method will find the tensor shapes (ahead of time) so that we can use `opt_einsum` to precompute the paths
         for the tensor contractions
@@ -262,12 +312,10 @@ class CartesianContraction(nn.Module):
         shapes = []
 
         for rank in split:
-
             shape = ()
 
-            if n_neighbours:
-
-                shape += (n_neighbours,)
+            if n_extra_dim:
+                shape += (n_extra_dim,)
 
             shape += (n_channels,)
 
@@ -296,43 +344,36 @@ class CartesianContraction(nn.Module):
             # self.tensors_out.append(
             #     torch.einsum(einsum, *tensors_in)
             # )
-            # stopped working after added multiple neighbours aswell as multiple channels
+            # stopped working after added multiple nodes aswell as multiple channels
             tensors_out.append(self.buffer[einsum](*tensors_in))
 
         return tensors_out
 
 
-def main():
-
+# use
+if __name__ == "__main__":
     # hyperparameters
     dim = 2
     nu_max = 4
     c_in_max = 2
     c_out_max = 2
-    n_channels = 2
+    n_channels = 3
+    n_nodes = 4
 
     # a set of many channeled atomic bases
-    a_0 = torch.randn(n_channels, 1)
-    a_1 = torch.randn(n_channels, dim)
-    a_2 = torch.randn(n_channels, dim, dim)
+    a_0 = torch.randn(n_nodes, n_channels, 1)
+    a_1 = torch.randn(n_nodes, n_channels, dim)
+    a_2 = torch.randn(n_nodes, n_channels, dim, dim)
 
     # need to generalise here to include A < 10 ish
     a_set = [a_0, a_1, a_2]
 
-
-    weighted_sum = WeightedSum(nu_max=nu_max, c_in_max=c_in_max, c_out_max=c_out_max, n_channels=n_channels, dim=2)
+    weighted_sum = WeightedSum(
+        nu_max=nu_max,
+        c_in_max=c_in_max,
+        c_out_max=c_out_max,
+        n_channels=n_channels,
+        dim=dim,
+        n_nodes=n_nodes,
+    )
     print(weighted_sum(a_set))
-
-    # ([tensor([-158.3259, -71.3076], grad_fn= < ViewBackward0 >), tensor([[59.1945, 51.1799],
-    #                                                                      [22.1630, 3.9932]],
-    #                                                                     grad_fn= < ViewBackward0 >), tensor(
-    #     [[[85.6307, -5.7223],
-    #       [89.5505, -185.2016]],
-    #
-    #      [[466.3008, 70.0927],
-    #       [-78.2363, -81.4177]]], grad_fn= < ViewBackward0 >)], [179, 169, 598])
-
-
-# use
-if __name__ == "__main__":
-    main()
