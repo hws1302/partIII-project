@@ -6,17 +6,17 @@ import torch
 import math
 
 from torch.nn import Module, Parameter, ModuleDict
-from Cartesian_MACE.utils.cartesian_contractions import (
+from cartesian_mace.utils.cartesian_contractions import (
     e_rbf,
     tensor_prod,
     contraction_is_valid,
     create_zero_feature_tensors,
 )
-from Cartesian_MACE.modules.momentmodel import CartesianContraction
+from cartesian_mace.modules.tensor_contraction_block import CartesianContraction
 from torch_scatter import scatter
 
 
-class AtomicBasisGraph(Module):
+class AtomicBasis(Module):
     """ "
     Block that creates the atomic basis vectors A for a given neighbourhood
 
@@ -38,7 +38,8 @@ class AtomicBasisGraph(Module):
         n_nodes: int,
         dim: int,
         layer: int,
-        n_edges: int,
+        n_edges: int, # need to remove
+        h_rank_max: int,
     ):
         # n_neighbours is a not nice way of saying irreps in -> look to MACE for inspo
         # eventually have irreps_in as an input that can be read from a list (irrep_seq)
@@ -53,13 +54,14 @@ class AtomicBasisGraph(Module):
         self.basis_rank_max = basis_rank_max
         self.dim = dim
         self.n_edges = n_edges
+        self.h_rank_max = h_rank_max
         # shape = [self.dim] * basis_rank # need to figure this one out **
         # shape.insert(0, n_channels)
         # self.A = torch.zeros(shape)
         self.self_tp_rank_max = self_tp_rank_max
         self.channel_weights = Parameter(
             data=torch.randn(
-                self.basis_rank_max + 1, self.n_edges, self.n_channels, self.n_channels
+                self.h_rank_max + 1, self.n_channels, self.n_channels
             )
         )
         self.contractions = ModuleDict()
@@ -67,16 +69,11 @@ class AtomicBasisGraph(Module):
         self.extra_dims = 2  # one for the channels and the other for neighbours
         self.layer = layer
 
-        # remove hard-coding ASAP **
-        if self.layer == 0:
-            self.h_max_rank = 0  # have this as an input
-        else:
-            self.h_max_rank = 2
 
-        for n_indices in range(0, self.h_max_rank + self.self_tp_rank_max + 1):
+        for n_indices in range(0, self.h_rank_max + self.self_tp_rank_max + 1):
             # could probably add to other function but would get rid of the simplicity
             splits = find_combinations(
-                a_max=self.h_max_rank,
+                a_max=self.h_rank_max,
                 b_max=self.self_tp_rank_max,
                 desired_sum=n_indices,
             )
@@ -96,7 +93,7 @@ class AtomicBasisGraph(Module):
                             dim=self.dim,
                             n_channels=self.n_channels,
                             extra_dims=self.extra_dims,
-                            n_extra_dim=n_edges,  # switched out from n_neighbours
+                            n_extra_dim=n_edges,  # switched out from n_neighbours **
                             split=split,
                         )
 
@@ -116,10 +113,10 @@ class AtomicBasisGraph(Module):
         h = [g[edge_index[1]] for g in h]
 
         self.h = [
-            torch.einsum(
-                "ijk,ik...->ij...", self.channel_weights[basis_rank], h[basis_rank]
-            )
-            for basis_rank in range(0, self.basis_rank_max + 1)
+            torch.einsum( # [n_channels, n_channels] x [n_edges, n_channels, tensor_shape] -> [n_edges x n_channels x tensor shape]
+                "ij,kj...->ki...", self.channel_weights[h_rank], h[h_rank]
+        )
+            for h_rank in range(0, self.h_rank_max + 1)
         ]
 
         # precompute to r self tensor products of normalised directions
@@ -147,11 +144,11 @@ class AtomicBasisGraph(Module):
         # now broadcast along the radial embedding
 
         # loop over the number of indices pre contraction
-        for n_indices in range(0, self.h_max_rank + self.self_tp_rank_max + 1):
+        for n_indices in range(0, self.h_rank_max + self.self_tp_rank_max + 1):
             # could probably add to other function but would get rid of the simplicity
             # maybe change the ordering here
             splits = find_combinations(
-                a_max=self.h_max_rank,
+                a_max=self.h_rank_max,
                 b_max=self.self_tp_rank_max,
                 desired_sum=n_indices,
             )
@@ -179,22 +176,25 @@ class AtomicBasisGraph(Module):
         # now sum along an axis
         # iterate over all the tensor ranks
         for tensor_rank_out in self.tensors_out:
-            tensor_rank_out = torch.stack(tensor_rank_out)
+
+            if tensor_rank_out:
+                tensor_rank_out = torch.stack(tensor_rank_out)
+
             # sum over the neighbours axis
             # leaves us with n_channels x tensor shape
 
-            self.a_set.append(torch.einsum("ijk...->k...", tensor_rank_out))
+                self.a_set.append(torch.einsum("ijk...->k...", tensor_rank_out))
 
-            # # need to sum over both the neighbours (scatter)
-            # # sum over different contractions (we don't weight ?! -> we should do implicitly via the radial embedding)
-            tensor_rank_out = torch.einsum("i...->...", tensor_rank_out)
-            #
-            # # sum over the different neighbourhoods
-            # # indexing of first channels n_nodes is done in accordance with edge_index[0]
-            # # [n_edges x n_channels x tensor_shape] -> [n_nodes x n_channels x tensor_shape]
-            self.a_set_pyg.append(
-                scatter(src=tensor_rank_out, index=edge_index[0], dim=0, reduce="sum")
-            )
+                # # need to sum over both the neighbours (scatter)
+                # # sum over different contractions (we don't weight ?! -> we should do implicitly via the radial embedding)
+                tensor_rank_out = torch.einsum("i...->...", tensor_rank_out)
+                #
+                # # sum over the different neighbourhoods
+                # # indexing of first channels n_nodes is done in accordance with edge_index[0]
+                # # [n_edges x n_channels x tensor_shape] -> [n_nodes x n_channels x tensor_shape]
+                self.a_set_pyg.append(
+                    scatter(src=tensor_rank_out, index=edge_index[0], dim=0, reduce="sum")
+                )
 
         return self.a_set_pyg
 
@@ -257,7 +257,7 @@ if __name__ == "__main__":
     # h[1] += torch.randn(n_neighbours, n_channels, 2)
     # h[2] += torch.randn(n_neighbours, n_channels, 2,2)
 
-    A = AtomicBasisGraph(
+    A = AtomicBasis(
         basis_rank_max=basis_rank_max,
         self_tp_rank_max=self_tp_rank_max,
         n_channels=n_channels,
