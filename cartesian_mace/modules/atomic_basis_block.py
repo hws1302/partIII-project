@@ -37,12 +37,9 @@ class AtomicBasis(Module):
         n_channels: int,
         n_nodes: int,
         dim: int,
-        layer: int,
         n_edges: int, # need to remove
         h_rank_max: int,
     ):
-        # n_neighbours is a not nice way of saying irreps in -> look to MACE for inspo
-        # eventually have irreps_in as an input that can be read from a list (irrep_seq)
 
         super().__init__()
 
@@ -55,19 +52,12 @@ class AtomicBasis(Module):
         self.dim = dim
         self.n_edges = n_edges
         self.h_rank_max = h_rank_max
-        # shape = [self.dim] * basis_rank # need to figure this one out **
-        # shape.insert(0, n_channels)
-        # self.A = torch.zeros(shape)
         self.self_tp_rank_max = self_tp_rank_max
-        self.channel_weights = Parameter(
-            data=torch.randn(
-                self.h_rank_max + 1, self.n_channels, self.n_channels
-            )
-        )
         self.contractions = ModuleDict()
+
+        self.channel_weights = Parameter(data=torch.randn(self.h_rank_max + 1, self.n_channels, self.n_channels))
         self.tensors_out = [[] for _ in range(self.basis_rank_max + 1)]
         self.extra_dims = 2  # one for the channels and the other for neighbours
-        self.layer = layer
 
 
         for n_indices in range(0, self.h_rank_max + self.self_tp_rank_max + 1):
@@ -97,11 +87,7 @@ class AtomicBasis(Module):
                             split=split,
                         )
 
-    def forward(self, h, pos, edge_index) -> torch.Tensor:
-        rel_pos = pos[edge_index[0]] - pos[edge_index[1]]
-        self.dists = torch.linalg.norm(rel_pos, dim=-1)
-        self.norm_rel_pos = rel_pos / self.dists.reshape(-1, 1)
-        self.n_edges = len(edge_index[0])
+    def forward(self, h, rel_pos, edge_index, edge_attr) -> torch.Tensor:
 
         # mix channels
         # weight: n_neighbours x n_channels x n_channels
@@ -117,28 +103,6 @@ class AtomicBasis(Module):
                 "ij,kj...->ki...", self.channel_weights[h_rank], h[h_rank]
         )
             for h_rank in range(0, self.h_rank_max + 1)
-        ]
-
-        # precompute to r self tensor products of normalised directions
-        # do we need some kind of normalisation \propto c1?
-        # each element of list has shape n_neighbours x tensor_shape
-        self.r_tensors = [
-            tensor_prod(r=self.norm_rel_pos, order=rank)
-            for rank in range(0, self.self_tp_rank_max + 1)
-        ]
-
-        n_values = torch.arange(1, self.n_channels + 1).unsqueeze(1)
-        # why are all channels the same value
-        # self.dists is r_ij where i is edge_index 0 and j is edge_index 1
-        self.radial_emb = e_rbf(r=self.dists, n=n_values).reshape(
-            self.n_edges, self.n_channels
-        )
-
-        # ij, j...->ij...
-        # pretty sure this is a dodgy expression
-        r_tensors = [
-            torch.einsum("ij,i...->ij...", self.radial_emb, self.r_tensors[basis_rank])
-            for basis_rank in range(0, self.self_tp_rank_max + 1)
         ]
 
         # now broadcast along the radial embedding
@@ -161,44 +125,39 @@ class AtomicBasis(Module):
                         num_legs_in=n_indices, num_legs_out=basis_rank
                     ):
                         # h[basis_rank] shape n_channels x n_neighbours x tensor_shape
-                        # r_tensors[basis_rank] shape n_neighbours x tensor_shape
-                        # r_tensors gets n_channels part from the radial embedding
+                        # edge_attr[basis_rank] shape n_neighbours x tensor_shape
+                        # edge_attr gets n_channels part from the radial embedding
 
                         self.tensors_out[basis_rank].extend(
                             self.contractions[f"{split_str}:{basis_rank}"](
-                                tensors_in=([h[split[0]], r_tensors[split[1]]])
+                                tensors_in=([h[split[0]], edge_attr[split[1]]])
                             )
                         )
 
         self.a_set = []
-        self.a_set_pyg = []
 
         # now sum along an axis
         # iterate over all the tensor ranks
         for tensor_rank_out in self.tensors_out:
 
             if tensor_rank_out:
+
                 tensor_rank_out = torch.stack(tensor_rank_out)
 
-            # sum over the neighbours axis
-            # leaves us with n_channels x tensor shape
-
-                self.a_set.append(torch.einsum("ijk...->k...", tensor_rank_out))
-
-                # # need to sum over both the neighbours (scatter)
-                # # sum over different contractions (we don't weight ?! -> we should do implicitly via the radial embedding)
+                # this is a sum over all contractions
+                # [n_paths, n_edges, n_channels, tensor_shape]
                 tensor_rank_out = torch.einsum("i...->...", tensor_rank_out)
                 #
                 # # sum over the different neighbourhoods
                 # # indexing of first channels n_nodes is done in accordance with edge_index[0]
                 # # [n_edges x n_channels x tensor_shape] -> [n_nodes x n_channels x tensor_shape]
-                self.a_set_pyg.append(
+                self.a_set.append(
                     scatter(src=tensor_rank_out, index=edge_index[0], dim=0, reduce="sum")
                 )
 
-        return self.a_set_pyg
+        return self.a_set
 
-
+# need to rename this function and move to utils
 def find_combinations(a_max, b_max, desired_sum):
     combinations = []
 
