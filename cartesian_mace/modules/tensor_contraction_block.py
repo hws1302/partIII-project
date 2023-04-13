@@ -52,6 +52,8 @@ class CartesianContraction(Module):
             )
 
             # find the tensor shapes ahead of time to store path
+            # currently we do this such that a whole graph is a single contraction
+            # do some testing to see the speed difference of this **
             self.shapes = self.produce_tensor_shapes(
                 split=split,
                 n_channels=self.n_channels,
@@ -105,6 +107,9 @@ class CartesianContraction(Module):
 
     def forward(self, tensors_in: List[torch.Tensor]) -> List[torch.Tensor]:
         """
+        Returns list of all tensors of the contraction defined in __init__()
+
+
         Parameters:
               tensors_in: tensors of correct order
 
@@ -115,10 +120,7 @@ class CartesianContraction(Module):
         tensors_out = []
 
         for einsum in self.einsums:
-            # self.tensors_out.append(
-            #     torch.einsum(einsum, *tensors_in)
-            # )
-            # stopped working after added multiple nodes aswell as multiple channels
+            # ** comment on shape here, things may change so look to change in future
             tensors_out.append(self.buffer[einsum](*tensors_in))
 
         return tensors_out

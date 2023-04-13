@@ -59,6 +59,8 @@ class WeightedSum(Module):
 
                     # only one mix of A's channels per split (i.e. same mix for all `c_out`)
                     # currently create the mixing before checking if there are any valid one **
+                    # one channel mixing matrix per term in the prod
+                    # [nu, n_channels, n_channels]
                     self.channel_mixing[split_str] = Parameter(
                         data=torch.randn(nu, self.n_channels, self.n_channels),
                         requires_grad=True,
@@ -85,16 +87,20 @@ class WeightedSum(Module):
                                 n_channels=self.n_channels,
                                 extra_dims=1,  # take out hard-coding
                                 n_extra_dim=self.n_nodes,  # need to put in size for contractions ahead of time can we get past this?**
+                                # alternative would be to create the contraction and call it once per node in the forward
+                                # (we can disucss this)
                                 split=split,
                             )
 
         # add in extra dim for the node dimension
+
         self.path_weights = [
             Parameter(
                 data=torch.randn(self.tot[c_out], self.n_channels), requires_grad=True
-            )
+            ) # [n_paths, n_channels]
             for c_out in range(0, self.c_out_max + 1)
         ]
+
 
     def forward(self, a_set: List[torch.Tensor]) -> torch.Tensor:
         """
@@ -118,7 +124,9 @@ class WeightedSum(Module):
                     split_str = "".join(map(str, split))
 
                     # channel mixing of the A's
-                    # need to add in extra dim for nodes here
+                    # for A's of ea. rank we have with tensor_shape = [2,2] for C=2
+                    # in: [n_channels, n_channels] x [n_nodes, n_channels, tensor_shape]
+                    # out: [n_nodes, n_channels, tensors_shape]
                     mix = self.channel_mixing[split_str]
                     tensors_in = [
                         torch.einsum("ij,kj...->ki...", mix[i], a_set[rank])
@@ -138,6 +146,8 @@ class WeightedSum(Module):
                             tensor_bucket[c_out].extend(tensors_out)
 
         # for ea. c_out rank we take the linear weighted combination of paths
+        # again we deal with each tensor rank separately
+        # in: [n_paths, n_channels] x [n_paths, n_nodes, n_channels, tensor_shape]
         for c_out in range(0, self.c_out_max + 1):
             messages.append(
                 torch.einsum(

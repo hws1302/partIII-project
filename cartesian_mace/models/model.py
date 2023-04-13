@@ -9,7 +9,7 @@ from torch_geometric.nn import global_add_pool, global_mean_pool
 
 from cartesian_mace.modules.weighted_sum_block import WeightedSum
 from cartesian_mace.modules.atomic_basis_block import AtomicBasis
-from cartesian_mace.utils.cartesian_contractions import create_zero_feature_tensors
+from cartesian_mace.utils.cartesian_contractions import create_zero_feature_tensors, tensor_prod, e_rbf
 
 
 class CartesianMACE(Module):
@@ -81,7 +81,6 @@ class CartesianMACE(Module):
                     n_channels=self.n_channels,
                     n_nodes=self.n_nodes,
                     dim=self.dim,
-                    layer=i,
                     n_edges=self.n_edges,
                     h_rank_max=h_rank_max,
                 )
@@ -126,7 +125,9 @@ class CartesianMACE(Module):
                 )
             )
 
-        if False:
+
+        self.scalar_pred = False # just for now
+        if self.scalar_pred:
             # can we just flatten for when we have all irreps? **
             self.pred = torch.nn.Sequential(
                 torch.nn.Linear(self.n_channels, self.n_channels),
@@ -173,7 +174,7 @@ class CartesianMACE(Module):
 
         return h
 
-    def forward(self, data: Data) -> List[torch.Tensor]:
+    def forward(self, batch: Data) -> List[torch.Tensor]:
         """
         forward method, takes in a set of positions and node feature tensors and completes a message passing step.
         currently only the central node updates its features
@@ -181,6 +182,43 @@ class CartesianMACE(Module):
         data: `pytorch_geometric.data.Data` object with data for a single neighbourhood
 
         """
+
+        # moved all this code from `AtomicBasis` so is only used once per inference (instead of once per layer)
+        # use positions to find distances and normalised direction
+        # i.e. split up into radial and angular parts
+        rel_pos = batch.pos[batch.edge_index[0]] - batch.pos[batch.edge_index[1]]
+        dists = torch.linalg.norm(rel_pos, dim=-1)
+        norm_rel_pos = rel_pos / dists.reshape(-1, 1)
+
+        # take self TP rank times to find edge_attr
+        # talk about rank=0 case here
+        # in: [dim]
+        # out: [dim,] * rank
+        r_tensors = [
+            tensor_prod(r=norm_rel_pos, order=rank)
+            for rank in range(0, self.self_tp_rank_max + 1)
+        ]
+
+        n_values = torch.arange(1, self.n_channels + 1).unsqueeze(1)
+        # why are all channels the same value ** have a look at this problem
+        # self.dists is r_ij where i is edge_index 0 and j is edge_index 1
+        radial_emb = e_rbf(r=dists, n=n_values).reshape(
+            self.n_edges, self.n_channels
+        )
+
+        # here we project the self TP tensors along the channel dimension
+        # in: [n_edges, n_channels] x [n_edges, tensor_shape[tp_rank]]
+        # out: [n_edges, n_channels, tensor_shape[tp_rank]]
+        edge_attr = [
+            torch.einsum("ij,i...->ij...", radial_emb, r_tensors[tp_rank])
+            for tp_rank in range(0, self.self_tp_rank_max + 1)
+        ]
+
+        # we could potentially change this for flattened tensors for speed ?
+        # create the empty feature tensors
+        # such that we get a list of length feature_rank + 1 (can't forget scalar features)
+        # for each rank we get a tensor
+        # out: [n_nodes, n_channels, tensor_shape]
         h = create_zero_feature_tensors(
             feature_rank_max=self.feature_rank_max,
             n_nodes=self.n_nodes,
@@ -189,11 +227,9 @@ class CartesianMACE(Module):
         )
 
         h[0] = torch.randn(self.n_nodes, self.n_channels, 1)
-
+        # embedding not working **
         # h[0] = self.emb_in(data.atoms.clone()).reshape(self.n_nodes, self.n_channels, -1)
-        #
-        # # sort out shaping - don't really understand how this works
-        # h[0] = h0.reshape(self.n_nodes, self.n_channels, -1)
+
 
         # most important part of the class
         for create_atomic_basis, weighted_sum, channel_weights, message_weights in zip(
@@ -206,7 +242,7 @@ class CartesianMACE(Module):
 
             # MACE equation 8
             # a_set: List[ n_channels x tensor_shape[c_out] ]
-            a_set = create_atomic_basis(h=h, pos=data.pos, edge_index=data.edge_index)
+            a_set = create_atomic_basis(h=h, rel_pos=rel_pos, edge_index=batch.edge_index, edge_attr=edge_attr)
             a_set[0] = a_set[0].reshape(
                 self.n_nodes, self.n_channels, 1
             )  # currently put out incorrect shape for scalar
@@ -224,12 +260,6 @@ class CartesianMACE(Module):
                 h=h,
                 messages=messages,
             )
-
-        # add this in **
-        # i thought we only use invariants in prediction? **
-        # if self.scalar_pred:
-        #     # Select only scalars for prediction
-        #     h = h[0]
 
         # either linearise now or may be easeier to use torch_scatter directly **
         # out = self.pool(h[0], data.atoms).reshape(self.n_nodes, -1)
@@ -273,4 +303,4 @@ if __name__ == "__main__":
     )
 
     # do a forward pass
-    print(cartesian_mace(data=data))
+    print(cartesian_mace(batch=data))
