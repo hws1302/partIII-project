@@ -9,7 +9,7 @@ from torch_geometric.nn import global_add_pool, global_mean_pool
 
 from cartesian_mace.modules.weighted_sum_block import WeightedSum
 from cartesian_mace.modules.atomic_basis_block import AtomicBasis
-from cartesian_mace.utils.cartesian_contractions import create_zero_feature_tensors, tensor_prod, e_rbf
+from cartesian_mace.utils.cartesian_contractions import create_zero_feature_tensors, tensor_prod, e_rbf, linearise_features, init_orthogonal_weights
 
 
 class CartesianMACE(Module):
@@ -24,7 +24,7 @@ class CartesianMACE(Module):
     self_tp_rank_max: max rank of self tensor prod of relative positions (c1 in literature)
     basis_rank_max: max rank of the atomic basis A
     dim: dimension of positions (default = 3)
-    n_layers:
+    num_layers:
     nu_max:
     feature_rank_max:
 
@@ -34,28 +34,25 @@ class CartesianMACE(Module):
 
     def __init__(
         self,
-        n_channels: int,
-        n_nodes: int,
         self_tp_rank_max: int,
         basis_rank_max: int,
-        dim: Optional[int],
-        n_layers: int,
+        num_layers: int,
         nu_max: int,
         feature_rank_max: int,
-        n_edges: int,
-        pool: Optional[str] = 'sum'
+        dim: Optional[int] = 3,
+        pool: Optional[str] = 'sum',
+        out_dim: Optional[int] = 2,
+        in_dim: Optional[int] = 1,
     ):
         super().__init__()
         # initialise args
-        self.n_channels = n_channels
-        self.n_nodes = n_nodes  # could we only define this in the forward()? would help generalise network **
+        self.n_channels = in_dim
         self.self_tp_rank_max = self_tp_rank_max
         self.basis_rank_max = basis_rank_max
         self.dim = dim
-        self.n_layers = n_layers
+        self.num_layers = num_layers
         self.nu_max = nu_max
         self.feature_rank_max = feature_rank_max
-        self.n_edges = n_edges
 
         # how should I go about this, include an `atom_feature_rank` var?
         self.emb_in = Embedding(1, self.n_channels)
@@ -65,7 +62,9 @@ class CartesianMACE(Module):
         self.message_weights = ParameterList()
         self.pool = {"mean": global_mean_pool, "sum": global_add_pool}[pool]
 
-        for i in range(self.n_layers):
+        # torch.manual_seed(0)
+
+        for i in range(self.num_layers):
 
             # as in the first layer, only scalars are populated
             if i == 0:
@@ -79,9 +78,7 @@ class CartesianMACE(Module):
                     basis_rank_max=self.basis_rank_max,
                     self_tp_rank_max=self.self_tp_rank_max,
                     n_channels=self.n_channels,
-                    n_nodes=self.n_nodes,
                     dim=self.dim,
-                    n_edges=self.n_edges,
                     h_rank_max=h_rank_max,
                 )
             )
@@ -95,19 +92,19 @@ class CartesianMACE(Module):
                     c_out_max=self.feature_rank_max,
                     n_channels=self.n_channels,
                     dim=self.dim,
-                    n_nodes=self.n_nodes,
+                    # should probably explicitly have n_extra_dims=self.n_extra_dims
                 )
             )
 
             # weights for mixing the channels of the messages
             self.message_weights.append(
                 Parameter(
-                    data=torch.randn(
-                        self.feature_rank_max + 1,
-                        self.n_nodes,
-                        self.n_channels,
-                        self.n_channels,
-                    ),
+                    data=init_orthogonal_weights(n_channels=self.n_channels, extra_dim=self.feature_rank_max + 1),
+                    # data=torch.randn(
+                    #     self.feature_rank_max + 1,
+                    #     self.n_channels,
+                    #     self.n_channels,
+                    # ),
                     requires_grad=True,
                 )
             )
@@ -115,27 +112,21 @@ class CartesianMACE(Module):
             # weights for mixing the channels of the previous layer feature tensors
             self.channel_weights.append(
                 Parameter(
-                    data=torch.randn(
-                        self.feature_rank_max + 1,
-                        self.n_nodes, # ** remove here
-                        self.n_channels,
-                        self.n_channels,
-                    ),
+                    data=init_orthogonal_weights(n_channels=self.n_channels, extra_dim=self.feature_rank_max + 1),
+                    # data=torch.randn(
+                    #     self.feature_rank_max + 1,
+                    #     self.n_channels,
+                    #     self.n_channels,
+                    # ),
                     requires_grad=True,
                 )
             )
 
-
-        self.scalar_pred = False # just for now
-        if self.scalar_pred:
-            # can we just flatten for when we have all irreps? **
-            self.pred = torch.nn.Sequential(
-                torch.nn.Linear(self.n_channels, self.n_channels),
-                torch.nn.ReLU(),
-                torch.nn.Linear(self.n_channels, 2)
-            )
-        else:
-            self.pred = torch.nn.Linear(self.n_nodes, 2)
+        lengths = torch.Tensor([dim**c for c in range(0, self.feature_rank_max + 1)])
+        lengths[0] = 1
+        lengths *= self.n_channels
+        tot_length = torch.sum(lengths, dtype=int)
+        self.pred = torch.nn.Linear(tot_length,out_dim)
 
     def update(
         self,
@@ -165,16 +156,16 @@ class CartesianMACE(Module):
         for c_out in range(self.feature_rank_max + 1):
             # Mix node states from previous layers
             h_update.append(torch.einsum(
-                "ijk,ik...->ij...", channel_weights[c_out], h[c_out]
+                "ij,kj...->kj...", channel_weights[c_out], h[c_out]
             ))  # (n_nodes x n_channels x tensor_shape) -> (n_nodes x n_channels x tensor_shape)
             # Mix all messages of matching rank
             h_update[c_out] = h_update[c_out] + torch.einsum(
-                "ijk,ik...->ij...", message_weights[c_out], messages[c_out]
+                "ij,kj...->kj...", message_weights[c_out], messages[c_out]
             )  # (n_nodes x n_channels x tensor_shape) -> (n_nodes x n_channels x tensor_shape)
 
-        return h
+        return h_update
 
-    def forward(self, batch: Data) -> List[torch.Tensor]:
+    def forward(self, batch: Data, test: Optional[bool] = False) -> List[torch.Tensor]:
         """
         forward method, takes in a set of positions and node feature tensors and completes a message passing step.
         currently only the central node updates its features
@@ -182,6 +173,8 @@ class CartesianMACE(Module):
         data: `pytorch_geometric.data.Data` object with data for a single neighbourhood
 
         """
+        self.n_edges = len(batch.edge_index[0])
+        self.n_nodes = len(batch.atoms)
 
         # moved all this code from `AtomicBasis` so is only used once per inference (instead of once per layer)
         # use positions to find distances and normalised direction
@@ -226,7 +219,10 @@ class CartesianMACE(Module):
             dim=self.dim,
         )
 
-        h[0] = torch.randn(self.n_nodes, self.n_channels, 1)
+        h[0] = self.emb_in(batch.atoms).unsqueeze(-1)
+
+        # torch.manual_seed(0)
+        # h[0] = torch.randn(self.n_nodes, self.n_channels, 1)
         # embedding not working **
         # h[0] = self.emb_in(data.atoms.clone()).reshape(self.n_nodes, self.n_channels, -1)
 
@@ -261,24 +257,38 @@ class CartesianMACE(Module):
                 messages=messages,
             )
 
-        # either linearise now or may be easeier to use torch_scatter directly **
-        # out = self.pool(h[0], data.atoms).reshape(self.n_nodes, -1)
+        # either linearise now or may be easier to use torch_scatter directly **
+        # out = self.pool(h[0], batch.batch).reshape(self.n_nodes, -1)
 
-        out = torch.sum(h[0], dim=1).T #only works for batchsize =1
+        # out = torch.sum(h[0], dim=1).T #only works for batchsize = 1
         # need to add in batch.batch here **
 
+        # (this is for equivariance testing)
+        # return h
+
+        if test:
+            return h
+
+        h = linearise_features(h=h)
+
+        # need to add this back in when using batches
+        out = self.pool(h, batch.batch)
+
+        # return torch.round(self.pred(out), decimals=4)
         return self.pred(out)
 
 
 if __name__ == "__main__":
-    atoms = torch.zeros(4, 1).long()
+    # torch.manual_seed(1)
+    atoms = torch.Tensor([0,0,0,0]).long()
     edge_index = torch.LongTensor([[0, 0, 1, 2, 1, 2, 2, 3], [1, 2, 2, 3, 0, 0, 1, 2]])
     pos = 5 * torch.Tensor(
         [[0, 0], [0.5, math.sqrt(3) * 0.5], [1, 0], [2, 0]]
     ) - torch.Tensor([5, 0])
     y = torch.Tensor([0])  # label
+    batch = torch.LongTensor([0,0,0,0])
 
-    data = Data(atoms=atoms, edge_index=edge_index, pos=pos, y=y)
+    batch = Data(atoms=atoms, edge_index=edge_index, pos=pos, y=y, batch=batch)
 
     n_channels = 3
     n_nodes = 4  # undirectional
@@ -286,21 +296,20 @@ if __name__ == "__main__":
     self_tp_rank_max = 3
     basis_rank_max = 2
     dim = 2
-    n_layers = 2
+    num_layers = 1
     nu_max = 4
     feature_rank_max = 2
 
     cartesian_mace = CartesianMACE(
-        n_channels=n_channels,
-        n_nodes=n_nodes,
+        # n_channels=n_channels,
         self_tp_rank_max=self_tp_rank_max,
         basis_rank_max=basis_rank_max,
         dim=dim,
-        n_layers=n_layers,
+        num_layers=num_layers,
         nu_max=nu_max,
         feature_rank_max=feature_rank_max,
-        n_edges=n_edges,
+        in_dim=2,
     )
 
     # do a forward pass
-    print(cartesian_mace(batch=data))
+    print(cartesian_mace(batch=batch))

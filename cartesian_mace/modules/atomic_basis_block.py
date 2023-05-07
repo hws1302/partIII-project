@@ -7,10 +7,9 @@ import math
 
 from torch.nn import Module, Parameter, ModuleDict
 from cartesian_mace.utils.cartesian_contractions import (
-    e_rbf,
-    tensor_prod,
     contraction_is_valid,
     create_zero_feature_tensors,
+    init_orthogonal_weights
 )
 from cartesian_mace.modules.tensor_contraction_block import CartesianContraction
 from torch_scatter import scatter
@@ -35,29 +34,25 @@ class AtomicBasis(Module):
         basis_rank_max: int,
         self_tp_rank_max: int,
         n_channels: int,
-        n_nodes: int,
         dim: int,
-        n_edges: int, # need to remove
         h_rank_max: int,
     ):
 
         super().__init__()
 
         # in future to map to different number of channels
-        self.n_nodes = n_nodes
         self.k = n_channels  # channels out
         self.k_tilde = n_channels  # channels in
         self.n_channels = n_channels
         self.basis_rank_max = basis_rank_max
         self.dim = dim
-        self.n_edges = n_edges
         self.h_rank_max = h_rank_max
         self.self_tp_rank_max = self_tp_rank_max
         self.contractions = ModuleDict()
 
-        self.channel_weights = Parameter(data=torch.randn(self.h_rank_max + 1, self.n_channels, self.n_channels))
-        self.tensors_out = [[] for _ in range(self.basis_rank_max + 1)]
-        self.extra_dims = 2  # one for the channels and the other for neighbours
+        # self.channel_weights = Parameter(data=torch.randn(self.h_rank_max + 1, self.n_channels, self.n_channels))
+        self.channel_weights = Parameter(data=init_orthogonal_weights(n_channels=self.n_channels, extra_dim=self.h_rank_max + 1))
+        self.extra_dims = 2  # one for the channels and one for neighbours
 
 
         for n_indices in range(0, self.h_rank_max + self.self_tp_rank_max + 1):
@@ -82,12 +77,16 @@ class AtomicBasis(Module):
                             c_out=basis_rank,
                             dim=self.dim,
                             n_channels=self.n_channels,
-                            extra_dims=self.extra_dims,
-                            n_extra_dim=n_edges,  # switched out from n_neighbours **
+                            n_extra_dim=self.extra_dims,  # switched out from n_neighbours **
                             split=split,
                         )
 
     def forward(self, h, rel_pos, edge_index, edge_attr) -> torch.Tensor:
+
+
+        a_set = []
+        tensors_out = [[] for _ in range(self.basis_rank_max + 1)]
+        n_nodes = len(h[0][0])
 
         # mix channels
         # weight: n_neighbours x n_channels x n_channels
@@ -98,7 +97,7 @@ class AtomicBasis(Module):
         # expand h needs better explanation **
         h = [g[edge_index[1]] for g in h]
 
-        self.h = [
+        h = [
             torch.einsum( # [n_channels, n_channels] x [n_edges, n_channels, tensor_shape] -> [n_edges x n_channels x tensor shape]
                 "ij,kj...->ki...", self.channel_weights[h_rank], h[h_rank]
         )
@@ -111,6 +110,7 @@ class AtomicBasis(Module):
         for n_indices in range(0, self.h_rank_max + self.self_tp_rank_max + 1):
             # could probably add to other function but would get rid of the simplicity
             # maybe change the ordering here
+            # could save the splits in init?
             splits = find_combinations(
                 a_max=self.h_rank_max,
                 b_max=self.self_tp_rank_max,
@@ -128,17 +128,15 @@ class AtomicBasis(Module):
                         # edge_attr[basis_rank] shape n_neighbours x tensor_shape
                         # edge_attr gets n_channels part from the radial embedding
 
-                        self.tensors_out[basis_rank].extend(
+                        tensors_out[basis_rank].extend(
                             self.contractions[f"{split_str}:{basis_rank}"](
                                 tensors_in=([h[split[0]], edge_attr[split[1]]])
                             )
                         )
 
-        self.a_set = []
-
         # now sum along an axis
         # iterate over all the tensor ranks
-        for tensor_rank_out in self.tensors_out:
+        for rank, tensor_rank_out in enumerate(tensors_out):
 
             if tensor_rank_out:
 
@@ -151,11 +149,18 @@ class AtomicBasis(Module):
                 # # sum over the different neighbourhoods
                 # # indexing of first channels n_nodes is done in accordance with edge_index[0]
                 # # [n_edges x n_channels x tensor_shape] -> [n_nodes x n_channels x tensor_shape]
-                self.a_set.append(
+                a_set.append(
                     scatter(src=tensor_rank_out, index=edge_index[0], dim=0, reduce="sum")
                 )
 
-        return self.a_set
+            else:
+
+                # not possible to get no scalars so don't have to consider this case
+                tensor_shape = (n_nodes, self.n_channels,)  + (self.dim,) * rank
+                tensor_rank_out = torch.zeros(tensor_shape)
+                a_set.append(tensor_rank_out)
+
+        return a_set
 
 # need to rename this function and move to utils
 def find_combinations(a_max, b_max, desired_sum):

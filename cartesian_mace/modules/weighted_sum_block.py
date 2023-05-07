@@ -1,5 +1,5 @@
 import torch
-from typing import List
+from typing import List, Optional
 from torch.nn import Module, Parameter, ModuleDict, ParameterDict
 from cartesian_mace.modules.tensor_contraction_block import CartesianContraction
 from cartesian_mace.utils.cartesian_contractions import find_combinations, count_contractions, contraction_is_valid
@@ -8,8 +8,8 @@ from cartesian_mace.utils.cartesian_contractions import find_combinations, count
 class WeightedSum(Module):
     """
     Produces a weighted sum of all possible contractions with c_out indices
-    (even if they have different numbers of contractions)
-    This function calls `CartesianContraction` to carry out the heavy lifting.
+    (even if they have different numbn` ers of contractions)
+    This function calls `CartesianContractioto carry out the heavy lifting.
     Linear combination initialised with random weights (look at torch.nn.Linear for better intialisation route)
 
     Parameters:
@@ -24,10 +24,10 @@ class WeightedSum(Module):
         c_out_max: int,
         n_channels: int,
         dim: int,
-        n_nodes: int,
+        n_extra_dims: Optional[int] = 2
     ):
         super().__init__()
-        self.n_nodes = n_nodes
+        self.n_extra_dims = n_extra_dims
         self.nu_max = nu_max
         self.c_in_max = c_in_max  # max rank of A's
         self.c_out_max = c_out_max
@@ -85,14 +85,15 @@ class WeightedSum(Module):
                                 c_out=c_out,
                                 dim=self.dim,
                                 n_channels=self.n_channels,
-                                extra_dims=1,  # take out hard-coding
-                                n_extra_dim=self.n_nodes,  # need to put in size for contractions ahead of time can we get past this?**
+                                n_extra_dim=self.n_extra_dims,  # need to put in size for contractions ahead of time can we get past this?**
                                 # alternative would be to create the contraction and call it once per node in the forward
                                 # (we can disucss this)
                                 split=split,
                             )
 
         # add in extra dim for the node dimension
+        # need to normalise these for ea. channel
+
 
         self.path_weights = [
             Parameter(
@@ -101,6 +102,18 @@ class WeightedSum(Module):
             for c_out in range(0, self.c_out_max + 1)
         ]
 
+
+
+        # self.path_weights = []
+        # for c_out in range(0, self.c_out_max + 1):
+        #
+        #     weights = torch.randn(self.tot[c_out], self.n_channels)
+        #     weights /= weights.std(dim=0)
+        #     self.path_weights.append(
+        #         Parameter(
+        #             data=weights, requires_grad=True
+        #         )
+        #     )
 
     def forward(self, a_set: List[torch.Tensor]) -> torch.Tensor:
         """
@@ -132,6 +145,8 @@ class WeightedSum(Module):
                         torch.einsum("ij,kj...->ki...", mix[i], a_set[rank])
                         for i, rank in enumerate(split)
                     ]
+
+                    # tensors_in = [a_set[rank] for rank in split]
 
                     for c_out in range(0, self.c_out_max + 1):
                         num_contractions = (n_indices - c_out) / 2

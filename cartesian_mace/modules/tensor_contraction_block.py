@@ -24,8 +24,7 @@ class CartesianContraction(Module):
         c_out: int,
         dim: int,
         n_channels: int,
-        extra_dims: int,
-        n_extra_dim: Optional[int] = 0,
+        n_extra_dim: Optional[int] = 2,
         split: Optional[List] = None,
     ):
         super().__init__()
@@ -37,10 +36,7 @@ class CartesianContraction(Module):
         self.einsums = []
         self.tensors_out = []
         self.split = split
-        self.extra_dims = extra_dims
-        self.n_extra_dim = (
-            n_extra_dim  # extra_dim for AtomicBasis and nodes for WeightedSum
-        )
+        self.n_extra_dims = n_extra_dim # default when for n and channel dimensions
         # this just applies to the A's and not the message creation step
 
         self.num_contractions = (self.n_indices - self.c_out) / 2
@@ -58,12 +54,12 @@ class CartesianContraction(Module):
                 split=split,
                 n_channels=self.n_channels,
                 dim=self.dim,
-                n_extra_dim=self.n_extra_dim,
+                n_extra_dims=self.n_extra_dims,
             )
 
             for cons in cons_combs:
                 einsum = cons_to_einsum(
-                    cons=cons, n=n_indices, split=self.split, extra_dims=self.extra_dims
+                    cons=cons, n=n_indices, split=self.split, extra_dims=self.n_extra_dims
                 )
 
                 self.einsums.append(
@@ -78,7 +74,7 @@ class CartesianContraction(Module):
         split: List[int],
         n_channels: int,
         dim: int,
-        n_extra_dim: Optional[int] = 0,
+        n_extra_dims: Optional[int] = 0,
     ) -> List[Tuple[int]]:
         """
         This method will find the tensor shapes (ahead of time) so that we can use `opt_einsum` to precompute the paths
@@ -90,10 +86,9 @@ class CartesianContraction(Module):
         for rank in split:
             shape = ()
 
-            if n_extra_dim:
-                shape += (n_extra_dim,)
+            shape += (1,) * self.n_extra_dims
 
-            shape += (n_channels,)
+            # add back in the extra dim for n_nodes/n_edges
 
             if rank == 0:
                 shape += (1,)
