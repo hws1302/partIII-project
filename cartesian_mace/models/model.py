@@ -43,6 +43,7 @@ class CartesianMACE(Module):
         pool: Optional[str] = 'sum',
         out_dim: Optional[int] = 2,
         in_dim: Optional[int] = 1,
+        scalar_pred: Optional[bool] = False
     ):
         super().__init__()
         # initialise args
@@ -53,6 +54,8 @@ class CartesianMACE(Module):
         self.num_layers = num_layers
         self.nu_max = nu_max
         self.feature_rank_max = feature_rank_max
+        self.scalar_pred = scalar_pred
+        self.out_dim = out_dim
 
         # how should I go about this, include an `atom_feature_rank` var?
         self.emb_in = Embedding(1, self.n_channels)
@@ -66,7 +69,7 @@ class CartesianMACE(Module):
 
         for i in range(self.num_layers):
 
-            # as in the first layer, only scalars are populated
+            # as in the first layer, only scalars are used?
             if i == 0:
                 h_rank_max = 0
             else:
@@ -122,10 +125,15 @@ class CartesianMACE(Module):
                 )
             )
 
-        lengths = torch.Tensor([dim**c for c in range(0, self.feature_rank_max + 1)])
-        lengths[0] = 1
-        lengths *= self.n_channels
-        tot_length = torch.sum(lengths, dtype=int)
+        if self.scalar_pred:
+            tot_length = self.n_channels
+
+        else:
+            lengths = torch.Tensor([dim**c for c in range(0, self.feature_rank_max + 1)])
+            lengths[0] = 1
+            lengths *= self.n_channels
+            tot_length = torch.sum(lengths, dtype=int)
+
         self.pred = torch.nn.Linear(tot_length,out_dim)
 
     def update(
@@ -266,15 +274,17 @@ class CartesianMACE(Module):
         # (this is for equivariance testing)
         # return h
 
-        if test:
+        if test: # for equivariance testing
             return h
 
         h = linearise_features(h=h)
 
-        # need to add this back in when using batches
+        if self.scalar_pred:
+            # Select only scalars for prediction
+            h = h[:,:self.n_channels]
+
         out = self.pool(h, batch.batch)
 
-        # return torch.round(self.pred(out), decimals=4)
         return self.pred(out)
 
 
@@ -290,7 +300,7 @@ if __name__ == "__main__":
 
     batch = Data(atoms=atoms, edge_index=edge_index, pos=pos, y=y, batch=batch)
 
-    n_channels = 3
+    n_channels = 1
     n_nodes = 4  # undirectional
     n_edges = len(edge_index[0])
     self_tp_rank_max = 3
@@ -308,7 +318,7 @@ if __name__ == "__main__":
         num_layers=num_layers,
         nu_max=nu_max,
         feature_rank_max=feature_rank_max,
-        in_dim=2,
+        in_dim=1,
     )
 
     # do a forward pass
