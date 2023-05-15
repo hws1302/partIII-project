@@ -1,0 +1,33 @@
+\usepackage{dirtree}
+
+\begin{itemize}
+    \item architecture was written using PyTorch and torch\_scatter
+    \item data was handled through the pytroch\_geometric.data.Data object
+    \item where was the code written 
+    \item X, Y, Z experiment were taken from the \textit{GNN Dojo} repository which went along wit
+    \item file structure
+\end{itemize}
+
+\begin{table*}[h!]
+    \centering
+    \resizebox{0.7\textwidth}{!}{%
+    \begin{tabular}{ccccc}
+     \toprule
+     Tensor & & & Shapes & Equation \\[0.2cm]
+     %
+     \midrule
+     %
+     $h_{i,kl_{2}m_{2}}^{(t)}$ & & & $[\text{N\_atoms},\text{N\_channels}, (l_{2}^{\text{max}} + 1)^{2}]$ & \eqref{eq:atomic-basis-t} \\[0.2cm]
+     $R^{(t)}_{kl_{1}l_{2}l_{3}}(r_{ji})$ & & & $[\text{N\_edges},\text{N\_channels}, \text{N\_basis}]$ & \eqref{eq:atomic-basis-t}  \\[0.2cm]
+     $C^{l_{3}m_{3}}_{l_{1}m_{1}, l_{2}m_{2}}$ & & & $[2 \times l_{3} + 1, 2 \times l_{1} + 1, 2 \times l_{2} + 1]$ & \eqref{eq:atomic-basis-t}  \\[0.2cm]
+     $A^{(t)}_{i,kl_{3}m_{3}}$ & & & $[\text{N\_atoms},\text{N\_channels}, (l_{3}^{\text{max}} + 1)^{2}]$ & \eqref{eq:atomic-basis-t}  \\[0.2cm]
+     $\mathcal{C}_{\eta_{\nu}, \textbf{lm}}^{LM}$ & & & $[(2\times L + 1), [(l^{\text{max}} + 1)^2]^{\nu}, \text{N\_path}]$ & \eqref{eq:symmbasis_L1}  \\[0.2cm]
+     ${\bm B}^{(t)}_{i,\eta_{\nu} \kk LM}$ & & & $[\text{N\_atoms},\text{N\_channels},\text{N\_path}, (2 \times L + 1)]$ & \eqref{eq:symmbasis_L1}  \\[0.2cm]
+     $W_{z_{i} k L, \eta_{\nu}}$ & & & $[\text{N\_channels}, \text{N\_elements},\text{N\_path}]$ & \eqref{eq:symmbasis_L1}  \\[0.2cm]
+     $m_{i,\kk LM}^{(t)}$ & & & $[\text{N\_atoms},\text{N\_channels}, (L+1)^{2}]$ & \eqref{eq:message}  \\[0.2cm]
+     \bottomrule
+    \end{tabular}
+    }
+    %\caption{Caption}
+    \label{tab:my_label}
+\end{table*}

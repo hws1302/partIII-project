@@ -1,0 +1,168 @@
+\documentclass[11pt,a4paper]{article}
+
+
+\usepackage[utf8]{inputenc} % allow utf-8 input
+\usepackage[T1]{fontenc}    % use 8-bit T1 fonts
+\usepackage[hidelinks]{hyperref}       % hyperlinks
+\usepackage[english]{babel}
+% \usepackage{natbib}
+\usepackage{url}            % simple URL typesetting
+\usepackage{booktabs}       % professional-quality tables
+\usepackage{amsfonts}       % blackboard math symbols
+\usepackage{nicefrac}       % compact symbols for 1/2, etc.
+\usepackage{microtype}      % microtypography
+\usepackage{amsmath}
+\usepackage{mathtools}
+\usepackage{isomath}
+\usepackage{float}
+\usepackage{wrapfig}
+\usepackage{multirow}
+\usepackage[margin=30mm]{geometry}
+\usepackage{xcolor}
+\usepackage{etoolbox}
+\usepackage{siunitx}
+\usepackage{subfiles}
+\setlength{\parindent}{0em}
+\setlength{\parskip}{0.5em}
+\usepackage{colortbl}
+\usepackage{multicol}
+\usepackage{dirtree}
+\usepackage{float}
+\usepackage{bigdelim}
+\usepackage{amsthm}
+\usepackage{array, multirow, bigdelim, makecell, booktabs} 
+%\newtheorem{theorem}{Theorem}
+\newtheorem{theorem}{Theorem}[section]
+\newtheorem{corollary}{Corollary}[theorem]
+\newtheorem{lemma}[theorem]{Lemma}
+\newtheorem{proposition}[theorem]{Proposition}
+\usepackage{cite}
+
+\usepackage{caption}
+\captionsetup{justification=centering} 
+
+\title{CMACE: An Expressive Equivariant Graph Neural Network with Higher Rank Cartesian Tensors}
+\author{Candidate Number: 8205R\\
+Supervisor: Pietro Li\`o\\
+Word Count: 4971}
+
+
+\begin{document}
+
+\maketitle
+
+%TC:ignore
+
+\begin{figure}[h]
+    \centering
+    \includegraphics[width=40mm]{figures/cambridge_logo.png}
+\end{figure}
+
+\begin{center}
+    Department of Physics
+    
+    University of Cambridge
+\end{center}
+
+\bigskip
+\medskip
+
+\begin{abstract}
+\centering
+In the past decade, Machine Learning has provided a wide range of computationally efficient models for calculating interatomic potentials for molecules whilst still retaining DFT-level accuracy. An example being Equivariant Graph Neural Networks which elevate scalar features to tensors enhancing the range of physical features they can model. This project presents CMACE, the first Cartesian tensor based model to have tensors of rank >1 and >3 many-body terms, drawing inspiring from it's spherical tensor analogue, MACE. Cartesian tensors allow for intuitive visual explanations of the operations of equivariant networks - a perspective currently absent from the literature. This approach simplifies equivariant models making them more accessible to audiences unfamiliar with spherical tensors. This work demonstrates CMACE maintains the same theoretical expressivity properties as MACE, making it more powerful than any current Cartesian architecture. CMACE also uses use tensor contraction path saving to speed up the contraction process $>5\times$ in some cases. Finally, the codebase lays solid foundations with which to optimise CMACE for benchmarking and other applications. 
+
+\end{abstract}
+
+\newpage
+\tableofcontents
+\newpage
+
+% \begin{multicols}{2}
+
+
+%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%% Introduction %%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%
+
+%TC:endignore
+
+\section{Introduction}
+
+\subfile{sections/introduction}
+
+%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%% Background %%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%
+\section{Background}
+
+
+\subfile{sections/background}
+
+%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%% MACE %%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%
+
+\section{MACE in a Cartesian basis}
+
+\subfile{sections/mace}
+
+%%%%%%%%%%%%%%%%%%%%%%
+%%%%% Experiments %%%%%
+%%%%%%%%%%%%%%%%%%%%%%
+\section{Experiments}
+
+\subfile{sections/theoretical_experiments}
+
+
+%%%%%%%%%%%%%%%%%%%%%%
+%%%%% Computational optimisations %%%%%
+%%%%%%%%%%%%%%%%%%%%%%
+
+\section{Computational Design}
+
+\subfile{sections/computational-design}
+
+%%%%%%%%%%%%%%%%%%%%%%
+%%%%% Further Work %%%%%
+%%%%%%%%%%%%%%%%%%%%%%
+\section{Further Work}
+
+\subfile{sections/further-work}
+
+
+%%%%%%%%%%%%%%%%%%%%%%
+%%%%% Conclusion %%%%%
+%%%%%%%%%%%%%%%%%%%%%%
+\section{Conclusion}
+\subfile{sections/conclusion}
+
+
+
+
+%%%%%%%%%%%%%%%%%%%%%%
+%%%%% References %%%%%
+%%%%%%%%%%%%%%%%%%%%%%
+
+%TC:ignore
+
+
+\bibliographystyle{ieeetr}
+\bibliography{references}
+
+
+
+%%%%%%%%%%%%%%%%%%%%
+%%%%% Appendix %%%%%
+%%%%%%%%%%%%%%%%%%%%
+\appendix
+
+\subfile{sections/appendix}
+
+% table of tensors shapes
+% proof for the number of contractions 
+% file structure etc. 
+% algorithm design?
+
+%TC:endignore
+
+\end{document}

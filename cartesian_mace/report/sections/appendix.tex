@@ -1,0 +1,97 @@
+\newpage
+\section{Appendix}
+
+\subsection{Tensor Shapes}
+
+Table \ref{tab:shapes} gives the shapes for the tensors used in the CMACE process. The \texttt{tensor\_shape} function is used as the Cartesian tensors require new dimensions as the rank increases (not the case for spherical tensors which are represented by $2\ell+1$ vectors). For example, $\texttt{tensor\_shape}(\ell=2) = [3,3]$, therefore, $h_{i,k\ell_1=2}$ has shape $[\texttt{n\_nodes},\texttt{n\_channels}, 3,3]$.
+
+Note that due to these strange shapes of Cartesian tensors, we could not just stack our features in a list like MACE. Instead we stack tensors of different rank into a list i.e. $[h_{i,k\ell_1=0},h_{i,k\ell_1=1},h_{i,k\ell_1=2}]$.
+
+\begin{table*}[h!]
+    \centering
+    \resizebox{0.9\textwidth}{!}{%
+    \begin{tabular}{cccccccc}
+     \toprule
+     Tensor & & & Shapes & Equation(s) \\[0.2cm]
+     %
+     \midrule
+     %
+     $h^{(t)}_{i,k\ell_1}$ & & & $[\texttt{n\_nodes},\texttt{n\_channels}, \texttt{tensor\_shape}(\ell_1)]$ & \eqref{eq:projection} 
+     \\[0.2cm]
+     $\hat r_{ij}^{\otimes \ell_2}$ & & & $[\texttt{n\_nodes},\texttt{n\_channels}, \texttt{tensor\_shape}(\ell_2)]$ & \eqref{eq:projection} \\[0.2cm]
+     $R_{k\ell_1\ell_2\ell_3}(|r_{ij}|)$ & & & $[\texttt{n\_edges},\texttt{n\_channels}]$ & (\ref{eq:phi}, \ref{eq:rbf}) \\[0.2cm]
+    $\phi^{(t)}_{ij,k,\ell_3}§$ & & & $[2\times \texttt{n\_edges},\texttt{n\_channels}, \texttt{tensor\_shape}(\ell_3)]$& \eqref{eq:phi}  \\[0.2cm]
+     $A^{(t)}_{i,k,\ell_3}$ & & & $[\texttt{n\_nodes},\texttt{n\_channels}, \texttt{tensor\_shape}(\ell_3)]$ & (\ref{eq:atomic-basis}, \ref{eq:product})  \\[0.2cm]
+     ${\mathbf B^{(t)}}_{i,k,L,\eta_{\nu}}$ & & & $[\texttt{n\_nodes},\texttt{n\_channels}, \texttt{tensor\_shape}(L)]$ & (\ref{eq:prod-con}, \ref{eq:message})  \\[0.2cm]
+     $m^{(t)}_{i,k,L}$ & & & $[\texttt{n\_nodes},\texttt{n\_channels}, \texttt{tensor\_shape}(L)]$ & (\ref{eq:message}, \ref{eq:update})  \\[0.2cm]
+     \bottomrule
+    \end{tabular}
+    }
+    \caption{Table adapted from Batatia et al. 2022 \cite{batatia2022mace}}
+    \label{tab:shapes}
+\end{table*}
+
+
+\subsection{File Structure}
+
+The file structure of the project. The model was stored in the \texttt{models/model.py} file which puts together the blocks from the \texttt{modules} directory. Experiments were carried out in jupyter notebook in the \texttt{experiments} directory. 
+
+\dirtree{%
+.1 .
+ .2 cartesian\_mace.
+ .3 experiments.
+ .4 geometric\_gnn\_101.ipynb.
+ .4 issues.ipynb.
+ .4 profile\_model.ipynb.
+ .4 rotsym.ipynb.
+ .4 speed\_tests.ipynb.
+ .4 tensor-contractions.ipynb.
+ .4 test\_path\_saving.ipynb.
+ .3 models.
+ .4 model.py.
+ .3 modules.
+ .4 atomic\_basis\_block.py.
+ .4 tensor\_contraction\_block.py.
+ .4 weighted\_sum\_block.py.
+ .3 test.
+ .4 test\_cotraction.ipynb.
+ .4 test\_equivariance.ipynb.
+ .3 utils.
+ .4 cartesian\_contractions.py.
+}
+
+\subsection{Different ways to contract} \label{sec:proof}
+
+A tensor of rank-$n$ has $n$ different indices e.g. scalars are rank-$0$ ($s$), vectors are rank-$1$ ($v_i$) and matrices are rank-$2$ ($M_{ij}$). It is possible to \textit{contract} over a pair of indices setting two indices to the same letter and summing over them. For example, contracting a matrix is equivalent to finding the trace, $\sum_i M_{ii}$. Contractions will decrease the rank of a tensor by $2$. 
+
+
+For our problem, it is useful to know how many ways a tensor can be contracted. If a tensor is of rank $n$ (i.e. $n$ indices) there are $n$ choose $2$, $n \choose 2$ ways of doing this. Taking a second contraction, there are now $ {n-2} \choose 2$ ways. Therefore, for $m$ contractions, we find the following formula: 
+
+\begin{align}
+  |\mathrm{contract}(n,m)| = &{n \choose 2} \cdot {{n-2} \choose 2} \cdots {{n - 2[m-1]} \choose 2}  \\
+       &= \frac{n!}{(n-2)!2!} \cdot \frac{(n-2)!}{(n-4)!2!} \cdots \frac{n!}{(n-2[k-1])!2!} \\
+       &= \frac{n!}{(n-2m)! m! (2!)^m}
+\end{align}
+
+
+This formula was used to check that the contract operator class was producing the correct amount of contractions.
+
+\subsection{Path finding and saving} \label{sec:paths}
+
+\textbf{Finding a path. }\\
+When contracting a tensor (by summing over the repeated indices), the resulting tensor is not dependent on the chosen order to sum over the indices, due to the associative nature of this operation. For example, to carry out the contraction in figure \ref{fig:tensor-net} $A_{ij}B_{ij}$ it is possible to sum over the $i$'s before or after summing over the $j$'s. Although paths do not affect the calculated result both the storage and compute are extremely sensitive to the path chosen to carry out a set of contractions \cite{Markov_2008}. Therefore, it is essential to find a (near) optimal path to limit unnecessary computation. The only problem is that path finding is also a highly non-trivial problem, to be certain you get the correct path you must check all permutations of the path i.e. $\mathrm O (N!)$. Therefore packages such as \texttt{opt\_einsum} have been created to find near-optimal paths at a fraction of the computational cost. For example, \texttt{Dynamic Programming} or the \texttt{Greedy} algorithm are used by \texttt{opt\_einsum} in this situation that suit it best. 
+
+\textbf{Reusing a path. }\\
+In the \textit{CMACE} architecture, the same tensor contractions occur every time a forward pass of the network is carried out, therefore it made sense to take advantage of the \texttt{opt\_einsum} path-saving functionality via the \texttt{ContractExpression} class. One instance of this class was needed for each contraction and was saved to a `buffer' dictionary accessible with a unique key associated with that contraction. This allowed for a near-optimal path to be used every time without having to recalculate what this path way.
+
+\textbf{Example. } To test the speeds of different path choosing methods we use the example of one of the possible contractions of 6 pairs of repeated indices across 6 tensors into a scalar (see Figure \ref{fig:con-tree}b). This contraction was implemented for a spatial dimension of 3 and a batch dimension of 1000. For this contraction, \texttt{opt\_einsum}'s predictor estimated that the near-optimal path would be 31x quicker than the na\"ive implementation. We then tested this out in practice using 1) an instance of the class with the path saved ahead of time (path graphically shown in Figure \ref{fig:con-tree}) 2) \texttt{torch.einsum} which does not save paths but uses \texttt{opt\_einsum} to calculate paths at runtime 3) \texttt{numpy.einsum} as the na\"ive implementation that doesn't use any optimisation. The results, listed in Table \ref{tab:con}, show that finding an optimal path is much quicker than the na\"ive implementation and saving paths is $>5\times$ quicker than calculating then at runtime. This shows that, given the majority of the models compute goes on contractions, we should certainly save paths and this is a useful optimisation to make. 
+
+\subsection{Testing} \label{sec:testing}
+
+Given this bespoke architecture was built from scratch, testing was important to ensure that our model and it's modules were behaving as expected. This was done through notebooks on which tested specific parts of the architecture. In future, this would be improved by using a proper testing framework such as \texttt{unittest}
+
+\textbf{Equivariance testing. } Given many of the computational and theoretical benefits of our model are related to its equivariance, this was a very important feature to test. As discussed earlier, equivariance is the idea that we can either rotate our inputs or rotate our outputs but we will get the same result i.e. $D(Q) \cdot f(x) = f(D(Q) \cdot x)$. The \texttt{transform\_tensors()} function detected the rank, $n$, of the input tensors and then transformed it via $n$ orthogonal rotation matrices, this could be done for input or output tensors. We then checked the outputs were the same for rotating before or after. The errors seen for the both the model as a whole and the moduels tested individually were $\sim 10^{-8}$ which is of similar magnitude of the off-diagonal element of $Q Q^T$ where $Q$ is an orthogonal matrix. 
+
+\textbf{Tensor contractions. } Another area of utmost importance was that of contraction calculation. This testing mainly occured on the \texttt{CartesianContraction} class as we checked that the numbers we got matched our analytic expression. We also checked that \texttt{AtomicBasis} and \texttt{WeightedSum} get the correct number of contractions especially when they came from different splits and in different numbers. 
+
+(lab book for project can be found in \texttt{zip} file)

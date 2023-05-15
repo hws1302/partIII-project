@@ -1,0 +1,11 @@
+\begin{itemize}
+    \item we decided that a main thing was to look at the inference speed of CMACE vs MACE due to computational complexity of CG contraction $O(N^6)$
+    \item show that overall they were of similar speed due to so inefficiencies of the CMACE model that could be done (but this wasn't the point of the project)
+    \item test the speed of the contractions and how they grow with different h, max\_ell and atomic basis 
+\end{itemize}
+
+One of the motivations for this experiment was that calculating tensor products is very expensive, $\O(L^6)$ where $L$ is the order of the representation, this is due to the need to calculate the Clebsch-Gordan coefficients **. The Cartesian basis on the other hand has scales the same way but cheaper or scales different? 
+
+Therefore, it is important to consider the speed differences between the two architectures both at the level of the tensor contraction and also model-wide. It is also important to see how these speed scales with the number of layers, maximum correlation order $\nu$, and maximum order $L$ (of representations i.e. $Y^m_\ell, r^{\otimes \ell}$. 
+
+
