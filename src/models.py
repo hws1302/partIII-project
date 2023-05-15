@@ -2,8 +2,8 @@ from typing import Callable, Optional, Union
 import torch
 from torch.nn import functional as F
 import torch_geometric
-from torch_geometric.nn import SchNet, DimeNetPlusPlus, global_add_pool, global_mean_pool
-import torch_scatter
+from torch_geometric.nn import SchNet, global_add_pool, global_mean_pool
+from torch_geometric.nn.models import DimeNet
 from torch_scatter import scatter
 from e3nn import o3
 
@@ -122,7 +122,8 @@ class MACEModel(torch.nn.Module):
             # Select only scalars for prediction
             h = h[:,:self.emb_dim]
         out = self.pool(h, batch.batch)  # (n, d) -> (batch_size, d)
-        return self.pred(out)  # (batch_size, out_dim)
+        # out = torch.sum(h, dim=0, keepdim=True)
+        return self.pred(out) # (batch_size, out_dim)
 
 
 class TFNModel(torch.nn.Module):
@@ -195,7 +196,7 @@ class TFNModel(torch.nn.Module):
             )
         else:
             self.pred = torch.nn.Linear(hidden_irreps.dim, out_dim)
-    
+
     def forward(self, batch):
         h = self.emb_in(batch.atoms)  # (n,) -> (n, d)
 
@@ -204,7 +205,7 @@ class TFNModel(torch.nn.Module):
         lengths = torch.linalg.norm(vectors, dim=-1, keepdim=True)  # [n_edges, 1]
         edge_attrs = self.spherical_harmonics(vectors)
         edge_feats = self.radial_embedding(lengths)
-        
+
         for conv in self.convs:
             # Message passing layer
             h_update = conv(h, batch.edge_index, edge_attrs, edge_feats)
@@ -215,7 +216,7 @@ class TFNModel(torch.nn.Module):
         if self.scalar_pred:
             # Select only scalars for prediction
             h = h[:,:self.emb_dim]
-        out = self.pool(h, batch.batch)  # (n, d) -> (batch_size, d)
+        out = self.pool(h, batch.batch)  # (n, d) -> (batch_size, d) # why isn't this now working ??
         return self.pred(out)  # (batch_size, out_dim)
 
 
@@ -250,7 +251,7 @@ class GVPGNNModel(torch.nn.Module):
         self.emb_in = torch.nn.Embedding(in_dim, emb_dim)
         self.W_e = torch.nn.Sequential(
             gvp.LayerNorm((self.radial_embedding.out_dim, 1)),
-            gvp.GVP((self.radial_embedding.out_dim, 1), _DEFAULT_E_DIM, 
+            gvp.GVP((self.radial_embedding.out_dim, 1), _DEFAULT_E_DIM,
                 activations=(None, None), vector_gate=True)
         )
         self.W_v = torch.nn.Sequential(
@@ -258,20 +259,20 @@ class GVPGNNModel(torch.nn.Module):
             gvp.GVP((emb_dim, 0), _DEFAULT_V_DIM,
                 activations=(None, None), vector_gate=True)
         )
-        
+
         # Stack of GNN layers
         self.layers = torch.nn.ModuleList(
-                gvp.GVPConvLayer(_DEFAULT_V_DIM, _DEFAULT_E_DIM, 
+                gvp.GVPConvLayer(_DEFAULT_V_DIM, _DEFAULT_E_DIM,
                              activations=activations, vector_gate=True,
-                             residual=residual) 
+                             residual=residual)
             for _ in range(num_layers))
-        
+
         self.W_out = torch.nn.Sequential(
             gvp.LayerNorm(_DEFAULT_V_DIM),
-            gvp.GVP(_DEFAULT_V_DIM, (emb_dim, 0), 
+            gvp.GVP(_DEFAULT_V_DIM, (emb_dim, 0),
                 activations=activations, vector_gate=True)
         )
-        
+
         # Global pooling/readout function
         self.pool = {"mean": global_mean_pool, "sum": global_add_pool}[pool]
 
@@ -281,24 +282,24 @@ class GVPGNNModel(torch.nn.Module):
             torch.nn.ReLU(),
             torch.nn.Linear(emb_dim, out_dim)
         )
-    
+
     def forward(self, batch):
 
         # Edge features
         vectors = batch.pos[batch.edge_index[0]] - batch.pos[batch.edge_index[1]]  # [n_edges, 3]
         lengths = torch.linalg.norm(vectors, dim=-1, keepdim=True)  # [n_edges, 1]
-        
+
         h_V = self.emb_in(batch.atoms)  # (n,) -> (n, d)
         h_E = (self.radial_embedding(lengths), torch.nan_to_num(torch.div(vectors, lengths)).unsqueeze_(-2))
 
         h_V = self.W_v(h_V)
         h_E = self.W_e(h_E)
-    
+
         for layer in self.layers:
             h_V = layer(h_V, batch.edge_index, h_E)
 
         out = self.W_out(h_V)
-        
+
         out = self.pool(out, batch.batch)  # (n, d) -> (batch_size, d)
         return self.pred(out)  # (batch_size, out_dim)
 
@@ -316,8 +317,8 @@ class EGNNModel(torch.nn.Module):
         pool="sum",
         residual=True
     ):
-        """E(n) Equivariant GNN model 
-        
+        """E(n) Equivariant GNN model
+
         Args:
             num_layers: (int) - number of message passing layers
             emb_dim: (int) - hidden dimension
@@ -351,7 +352,7 @@ class EGNNModel(torch.nn.Module):
         self.residual = residual
 
     def forward(self, batch):
-        
+
         h = self.emb_in(batch.atoms)  # (n,) -> (n, d)
         pos = batch.pos  # (n, 3)
 
@@ -360,7 +361,7 @@ class EGNNModel(torch.nn.Module):
             h_update, pos_update = conv(h, pos, batch.edge_index)
 
             # Update node features (n, d) -> (n, d)
-            h = h + h_update if self.residual else h_update 
+            h = h + h_update if self.residual else h_update
 
             # Update node coordinates (no residual) (n, 3) -> (n, 3)
             pos = pos_update
@@ -383,7 +384,7 @@ class MPNNModel(torch.nn.Module):
         residual=True
     ):
         """Vanilla Message Passing GNN model
-        
+
         Args:
             num_layers: (int) - number of message passing layers
             emb_dim: (int) - hidden dimension
@@ -417,9 +418,9 @@ class MPNNModel(torch.nn.Module):
         self.residual = residual
 
     def forward(self, batch):
-        
+
         h = self.emb_in(batch.atoms)  # (n,) -> (n, d)
-        
+
         for conv in self.convs:
             # Message passing layer and residual connection
             h = h + conv(h, batch.edge_index) if self.residual else conv(h, batch.edge_index)
@@ -430,19 +431,19 @@ class MPNNModel(torch.nn.Module):
 
 class SchNetModel(SchNet):
     def __init__(
-        self, 
-        hidden_channels: int = 128, 
+        self,
+        hidden_channels: int = 128,
         in_dim: int = 1,
-        out_dim: int = 1, 
-        num_filters: int = 128, 
+        out_dim: int = 1,
+        num_filters: int = 128,
         num_layers: int = 6,
-        num_gaussians: int = 50, 
-        cutoff: float = 10, 
-        max_num_neighbors: int = 32, 
-        readout: str = 'add', 
+        num_gaussians: int = 50,
+        cutoff: float = 10,
+        max_num_neighbors: int = 32,
+        readout: str = 'add',
         dipole: bool = False,
-        mean: Optional[float] = None, 
-        std: Optional[float] = None, 
+        mean: Optional[float] = None,
+        std: Optional[float] = None,
         atomref: Optional[torch.Tensor] = None,
     ):
         super().__init__(hidden_channels, num_filters, num_layers, num_gaussians, cutoff, max_num_neighbors, readout, dipole, mean, std, atomref)
@@ -468,30 +469,30 @@ class SchNetModel(SchNet):
         return out
 
 
-class DimeNetPPModel(DimeNetPlusPlus):
+class DimeNetPPModel(DimeNet):
     def __init__(
-        self, 
-        hidden_channels: int = 128, 
+        self,
+        hidden_channels: int = 128,
         in_dim: int = 1,
-        out_dim: int = 1, 
-        num_layers: int = 4, 
-        int_emb_size: int = 64, 
-        basis_emb_size: int = 8, 
-        out_emb_channels: int = 256, 
-        num_spherical: int = 7, 
-        num_radial: int = 6, 
-        cutoff: float = 10, 
-        max_num_neighbors: int = 32, 
-        envelope_exponent: int = 5, 
-        num_before_skip: int = 1, 
-        num_after_skip: int = 2, 
-        num_output_layers: int = 3, 
+        out_dim: int = 1,
+        num_layers: int = 4,
+        int_emb_size: int = 64,
+        basis_emb_size: int = 8,
+        out_emb_channels: int = 256,
+        num_spherical: int = 7,
+        num_radial: int = 6,
+        cutoff: float = 10,
+        max_num_neighbors: int = 32,
+        envelope_exponent: int = 5,
+        num_before_skip: int = 1,
+        num_after_skip: int = 2,
+        num_output_layers: int = 3,
         act: Union[str, Callable] = 'swish'
     ):
         super().__init__(hidden_channels, out_dim, num_layers, int_emb_size, basis_emb_size, out_emb_channels, num_spherical, num_radial, cutoff, max_num_neighbors, envelope_exponent, num_before_skip, num_after_skip, num_output_layers, act)
 
     def forward(self, batch):
-        
+
         i, j, idx_i, idx_j, idx_k, idx_kj, idx_ji = self.triplets(
             batch.edge_index, num_nodes=batch.atoms.size(0))
 
