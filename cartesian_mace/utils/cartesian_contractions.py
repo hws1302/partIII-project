@@ -6,6 +6,8 @@ from typing import Optional, Tuple, List, Generator
 from math import factorial as fact
 from scipy.stats import ortho_group
 
+device = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
+
 def pick_pairs(n_indices: int, n_contractions: int) -> Tuple[Tuple[str, str]]:
     """
     gives the combinations that `n_contractions` pairs of indices from a tensor with n_indices
@@ -442,4 +444,8 @@ def linearise_features(h: List[torch.Tensor]) -> torch.Tensor:
 
 def init_orthogonal_weights(n_channels: int, extra_dim: int) -> torch.Tensor:
 
-    return torch.stack([torch.from_numpy(ortho_group.rvs(n_channels)).to(torch.float32) for _ in range(extra_dim)])
+    if n_channels == 1:
+        return torch.stack([torch.Tensor([[1]]) for _ in range(extra_dim)])
+
+    else:
+        return torch.stack([torch.from_numpy(ortho_group.rvs(n_channels)).to(torch.float32) for _ in range(extra_dim)])
